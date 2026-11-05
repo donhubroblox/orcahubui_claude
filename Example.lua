@@ -11,7 +11,7 @@ local Window = OrcaHub:CreateWindow({
 	Icon = "waves",
 	Footer = "discord.gg/orcahub",
 	ToggleKey = Enum.KeyCode.RightShift,
-	Loading = { Subtitle = "Loading Grow a Garden..." },
+	Loading = { Steps = { "Preparing interface", "Loading Grow a Garden", "Applying your settings" } },
 })
 
 Window:Divider("Main")
@@ -33,7 +33,7 @@ AutoBuy:Dropdown({ Name = "Seeds to Buy", Options = { "Carrot", "Strawberry", "B
 local Collect = Farming:Section({ Name = "Auto Collect", Icon = "leaf", Side = "Left" })
 Collect:Toggle({ Name = "Auto Collect", Flag = "AutoCollect" }):AddKeybind({ Default = Enum.KeyCode.C })
 Collect:Toggle({ Name = "Collect Aura", Flag = "CollectAura" })
-Collect:Dropdown({ Name = "Collection Mode", Options = { "Instant", "Tween", "Walk" }, Default = "Instant", Flag = "CollectMode" })
+Collect:Segmented({ Name = "Collection Mode", Options = { "Instant", "Tween", "Walk" }, Default = "Instant", Flag = "CollectMode" })
 Collect:Slider({ Name = "Aura Range", Min = 5, Max = 100, Default = 25, Suffix = " studs", Flag = "AuraRange" })
 
 local Actions = Farming:Section({ Name = "Farming Actions", Side = "Right" })
@@ -44,8 +44,10 @@ Actions:Button({
 		OrcaHub:Notify({ Title = "Inventory", Content = "Your inventory is worth 1,240¢", Type = "Success" })
 	end,
 })
-Actions:Toggle({ Name = "Anti AFK", Flag = "AntiAFK" })
-Actions:Toggle({ Name = "Low Graphics", Flag = "LowGraphics" })
+Actions:Toggle({ Name = "Anti AFK", Flag = "AntiAFK", Style = "Checkbox" })
+Actions:Toggle({ Name = "Low Graphics", Flag = "LowGraphics", Style = "Checkbox" })
+local bag = Actions:Progress({ Name = "Backpack", Value = 12, Max = 60, Format = function(v, m) return v .. " / " .. m end })
+Actions:Toggle({ Name = "Auto Rebirth", Locked = "Premium" })
 Actions:Divider()
 Actions:Button({ Name = "Sell All", Style = "Primary", Icon = "shopping-cart" })
 Actions:Button({ Name = "Sell On Hand" })
@@ -101,7 +103,10 @@ Target:SetVisible(false)
 Window:CreateSettingsTab()
 OrcaHub:LoadAutoloadConfig()
 
-OrcaHub:Notify({ Title = "OrcaHub loaded", Content = "Press RightShift to toggle the menu.", Duration = 5 })
+OrcaHub:Notify({
+	Title = "OrcaHub loaded", Content = "Press RightShift to toggle the menu.", Duration = 6,
+	Buttons = { { Title = "Open Settings", Primary = true, Callback = function() Window.Tabs[#Window.Tabs]:Select() end }, { Title = "Dismiss" } },
+})
 
 task.spawn(function()
 	local amount = 20
@@ -109,6 +114,7 @@ task.spawn(function()
 		task.wait(2)
 		amount = amount + math.random(1, 15)
 		money:Set("Money: " .. amount .. "¢")
+		bag:Set(math.random(0, 60))
 		if OrcaHub.Flags.SilentAim then
 			Target:SetVisible(true)
 			targetName:Set("Alexei")
