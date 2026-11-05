@@ -19,7 +19,7 @@ local GuiService = Service("GuiService")
 local LocalPlayer = Players.LocalPlayer
 
 local OrcaHub = {
-	Version = "2.0.0",
+	Version = "2.1.0",
 	Flags = {},
 	Options = {},
 	Icons = {},
@@ -71,14 +71,18 @@ for k, v in pairs(OrcaHub.Themes.Orca) do OrcaHub.Theme[k] = v end
 local function T() return OrcaHub.Theme end
 
 local MOBILE = OrcaHub.IsMobile
-local ROW_H = MOBILE and 36 or 32
-local BOX_H = MOBILE and 34 or 30
-local TAB_H = MOBILE and 42 or 38
+local ROW_H = MOBILE and 34 or 32
+local BOX_H = MOBILE and 32 or 30
+local TAB_H = MOBILE and 40 or 38
 local ITEM_H = MOBILE and 32 or 28
 local SIDEBAR_W, SIDEBAR_COMPACT = 200, 60
-local TOPBAR_H, FOOTER_H = 58, 28
-local SECTION_HEADER = 42
-local PAD, GAP = 12, 12
+local TOPBAR_H = MOBILE and 50 or 58
+local FOOTER_H = MOBILE and 24 or 28
+local SECTION_HEADER = MOBILE and 40 or 42
+local SUBTAB_H = 34
+local PAD = MOBILE and 10 or 12
+local GAP = MOBILE and 10 or 12
+local SINGLE_COLUMN_BELOW = 540
 
 local STATUS = {
 	Info = { Icon = "info" },
@@ -248,11 +252,6 @@ local function isPress(input)
 	return input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch
 end
 
-local function isMove(input, pressInput)
-	if input.UserInputType == Enum.UserInputType.MouseMovement then return true end
-	return input.UserInputType == Enum.UserInputType.Touch and (pressInput == nil or input == pressInput)
-end
-
 local function vec2(v3) return Vector2.new(v3.X, v3.Y) end
 
 local function guiParent()
@@ -268,9 +267,75 @@ local function guiParent()
 	return LocalPlayer:WaitForChild("PlayerGui")
 end
 
+local function protect(gui)
+	pcall(function()
+		if syn and syn.protect_gui then syn.protect_gui(gui) end
+	end)
+	gui.Parent = guiParent()
+end
+
 local function viewport()
 	local cam = workspace.CurrentCamera
 	return cam and cam.ViewportSize or Vector2.new(1280, 720)
+end
+
+local function newScreenGui(order)
+	local gui = create("ScreenGui", {
+		Name = HttpService:GenerateGUID(false),
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+		ResetOnSpawn = false,
+		IgnoreGuiInset = false,
+		DisplayOrder = order or 100,
+	})
+	protect(gui)
+	return gui
+end
+
+---------------------------------------------------------------- shared pointer tracking
+-- One InputChanged/InputEnded listener drives every drag (sliders, windows, sections, pickers).
+
+local Pointer = { active = {}, conns = {} }
+
+function Pointer.track(pressInput, onMove, onEnd)
+	local id = {}
+	Pointer.active[id] = {
+		input = pressInput,
+		touch = pressInput.UserInputType == Enum.UserInputType.Touch,
+		move = onMove,
+		done = onEnd,
+	}
+	return function() Pointer.active[id] = nil end
+end
+
+function Pointer.start()
+	if #Pointer.conns > 0 then return end
+	table.insert(Pointer.conns, UserInputService.InputChanged:Connect(function(input)
+		local list = {}
+		for _, d in pairs(Pointer.active) do list[#list + 1] = d end
+		for _, d in ipairs(list) do
+			local match = (d.touch and input == d.input) or (not d.touch and input.UserInputType == Enum.UserInputType.MouseMovement)
+			if match and d.move then d.move(vec2(input.Position), input) end
+		end
+	end))
+	table.insert(Pointer.conns, UserInputService.InputEnded:Connect(function(input)
+		local ended = {}
+		for id, d in pairs(Pointer.active) do
+			if input == d.input or (not d.touch and input.UserInputType == Enum.UserInputType.MouseButton1) then
+				ended[#ended + 1] = id
+			end
+		end
+		for _, id in ipairs(ended) do
+			local d = Pointer.active[id]
+			Pointer.active[id] = nil
+			if d and d.done then d.done(vec2(input.Position)) end
+		end
+	end))
+end
+
+function Pointer.stop()
+	for _, c in ipairs(Pointer.conns) do c:Disconnect() end
+	Pointer.conns = {}
+	Pointer.active = {}
 end
 
 ---------------------------------------------------------------- files
@@ -289,16 +354,21 @@ local function ensureFolder(path)
 end
 
 local function readJSON(path)
-	if not hasFS() or not isfile(path) then return nil end
-	local ok, data = pcall(function() return HttpService:JSONDecode(readfile(path)) end)
+	if not hasFS() then return nil end
+	local ok, data = pcall(function()
+		if not isfile(path) then return nil end
+		return HttpService:JSONDecode(readfile(path))
+	end)
 	return ok and data or nil
 end
 
 local function writeJSON(path, data)
 	if not hasFS() then return false end
-	local folder = string.match(path, "^(.*)/[^/]+$")
-	if folder then ensureFolder(folder) end
-	return pcall(function() writefile(path, HttpService:JSONEncode(data)) end)
+	return pcall(function()
+		local folder = string.match(path, "^(.*)/[^/]+$")
+		if folder then ensureFolder(folder) end
+		writefile(path, HttpService:JSONEncode(data))
+	end)
 end
 
 local function serialize(v)
@@ -338,7 +408,10 @@ end
 
 function OrcaHub:DeleteConfig(name)
 	local path = self:_configFolder() .. "/" .. tostring(name) .. ".json"
-	if type(delfile) == "function" and isfile(path) then delfile(path) return true end
+	if type(delfile) == "function" and hasFS() and isfile(path) then
+		delfile(path)
+		return true
+	end
 	return false
 end
 
@@ -346,7 +419,7 @@ function OrcaHub:ListConfigs()
 	local out = {}
 	if type(listfiles) ~= "function" or not hasFS() then return out end
 	local folder = self:_configFolder()
-	ensureFolder(folder)
+	pcall(ensureFolder, folder)
 	local ok, files = pcall(listfiles, folder)
 	if not ok then return out end
 	for _, file in ipairs(files) do
@@ -359,16 +432,18 @@ end
 
 function OrcaHub:SetAutoload(name)
 	if not hasFS() then return end
-	ensureFolder(self:_configFolder())
-	writefile(self:_configFolder() .. "/autoload.txt", name or "")
+	pcall(function()
+		ensureFolder(self:_configFolder())
+		writefile(self:_configFolder() .. "/autoload.txt", name or "")
+	end)
 end
 
 function OrcaHub:GetAutoload()
 	local path = self:_configFolder() .. "/autoload.txt"
-	if hasFS() and isfile(path) then
-		local name = readfile(path)
-		if name ~= "" then return name end
-	end
+	local ok, name = pcall(function()
+		if hasFS() and isfile(path) then return readfile(path) end
+	end)
+	if ok and name and name ~= "" then return name end
 	return nil
 end
 
@@ -381,10 +456,6 @@ end
 ---------------------------------------------------------------- notifications
 
 local notifyCounter = 0
-local function nextNotifyOrder()
-	notifyCounter = notifyCounter + 1
-	return notifyCounter
-end
 
 function OrcaHub:Notify(o)
 	o = o or {}
@@ -395,11 +466,12 @@ function OrcaHub:Notify(o)
 	end
 	local status = STATUS[o.Type or "Info"] or STATUS.Info
 	local duration = o.Duration or 4
+	notifyCounter = notifyCounter + 1
 
 	local wrapper = create("Frame", {
 		Parent = window.NotifyHolder, BackgroundTransparency = 1,
 		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
-		LayoutOrder = nextNotifyOrder(),
+		LayoutOrder = notifyCounter,
 	})
 	local card = create("TextButton", {
 		Parent = wrapper, Text = "", AutoButtonColor = false,
@@ -429,11 +501,8 @@ function OrcaHub:Notify(o)
 	local progress = create("Frame", {
 		Parent = card, BorderSizePixel = 0, BackgroundColor3 = Color3.new(1, 1, 1),
 		AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0), Size = UDim2.new(1, 0, 0, 2),
-	}, { accentGradient(0) })
-	if status.Color then
-		progress:FindFirstChildOfClass("UIGradient"):Destroy()
-		progress.BackgroundColor3 = status.Color
-	end
+	})
+	if status.Color then progress.BackgroundColor3 = status.Color else accentGradient(0).Parent = progress end
 
 	tween(card, { Position = UDim2.new(0, 0, 0, 0) }, 0.45, Enum.EasingStyle.Back)
 	tween(progress, { Size = UDim2.new(0, 0, 0, 2) }, duration, Enum.EasingStyle.Linear)
@@ -454,12 +523,151 @@ function OrcaHub:Notify(o)
 	task.delay(duration, close)
 end
 
+---------------------------------------------------------------- key system
+
+function OrcaHub:KeySystem(o)
+	o = o or {}
+	local savePath = self.Folder .. "/" .. (o.FileName or "key") .. ".txt"
+	local function valid(key)
+		key = tostring(key or ""):gsub("^%s+", ""):gsub("%s+$", "")
+		if key == "" then return false end
+		if o.Validate then
+			local ok, result = pcall(o.Validate, key)
+			return ok and result == true
+		end
+		for _, k in ipairs(o.Keys or {}) do
+			if k == key then return true end
+		end
+		return false
+	end
+
+	if o.SaveKey ~= false and hasFS() then
+		local ok, saved = pcall(function() return isfile(savePath) and readfile(savePath) end)
+		if ok and saved and valid(saved) then return true end
+	end
+
+	local gui = newScreenGui(200)
+	local backdrop = create("Frame", {
+		Parent = gui, Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 1,
+	})
+	local card = create("Frame", {
+		Parent = gui, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(360, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		Theme = { BackgroundColor3 = "Section" },
+	}, { corner(14), padding(22, 22, 22, 22) })
+	local cardStroke = stroke("StrokeLight")
+	cardStroke.Parent = card
+	local cardScale = create("UIScale", { Parent = card, Scale = 0.9 })
+	create("UIListLayout", { Parent = card, Padding = UDim.new(0, 12), SortOrder = Enum.SortOrder.LayoutOrder })
+
+	local head = create("Frame", { Parent = card, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 40), LayoutOrder = 1 })
+	local logo = create("Frame", {
+		Parent = head, BackgroundColor3 = Color3.new(1, 1, 1), Size = UDim2.fromOffset(40, 40),
+	}, { corner(11), accentGradient(45) })
+	Icon(o.Icon or "key", 20, nil, {
+		Parent = logo, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), ImageColor3 = Color3.new(1, 1, 1),
+	})
+	text({ Parent = head, Text = o.Title or "OrcaHub", Weight = "Bold", TextSize = 16, Position = UDim2.fromOffset(52, 2), Size = UDim2.new(1, -52, 0, 20) })
+	text({
+		Parent = head, Text = o.Subtitle or "Key System", TextSize = 12, Position = UDim2.fromOffset(52, 22), Size = UDim2.new(1, -52, 0, 16),
+		Theme = { TextColor3 = "DimText" },
+	})
+	if o.Note then
+		text({
+			Parent = card, Text = o.Note, TextSize = 12, TextWrapped = true, LayoutOrder = 2,
+			Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Theme = { TextColor3 = "SubText" },
+		})
+	end
+	local boxFrame = create("Frame", {
+		Parent = card, Size = UDim2.new(1, 0, 0, 38), LayoutOrder = 3, Theme = { BackgroundColor3 = "Element" },
+	}, { corner(8) })
+	local boxStroke = stroke("Stroke")
+	boxStroke.Parent = boxFrame
+	local input = text({
+		Class = "TextBox", Parent = boxFrame, Text = "", PlaceholderText = "Paste your key here", ClearTextOnFocus = false,
+		Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -24, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd,
+		Theme = { TextColor3 = "Text", PlaceholderColor3 = "DimText" },
+	})
+	local status = text({
+		Parent = card, Text = "", TextSize = 12, LayoutOrder = 4, Size = UDim2.new(1, 0, 0, 14), Visible = false,
+		Theme = { TextColor3 = "SubText" },
+	})
+	local row = create("Frame", { Parent = card, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 36), LayoutOrder = 5 }, {
+		create("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder }),
+	})
+	local function button(label, primary, order)
+		local b = text({
+			Class = "TextButton", Parent = row, Text = label, Weight = "Medium", AutoButtonColor = false,
+			TextXAlignment = Enum.TextXAlignment.Center, Size = UDim2.new(o.KeyLink and 0.5 or 1, o.KeyLink and -4 or 0, 1, 0),
+			BackgroundTransparency = 0, BackgroundColor3 = Color3.new(1, 1, 1), LayoutOrder = order,
+			Theme = (not primary) and { BackgroundColor3 = "Element", TextColor3 = "Text" } or false,
+			TextColor3 = Color3.new(1, 1, 1),
+		})
+		corner(8).Parent = b
+		if primary then accentGradient(0).Parent = b else stroke("StrokeLight").Parent = b end
+		return b
+	end
+	local getKey = o.KeyLink and button("Get Key", false, 1)
+	local submit = button("Submit", true, 2)
+
+	tween(backdrop, { BackgroundTransparency = 0.4 }, 0.3)
+	tween(cardScale, { Scale = 1 }, 0.4, Enum.EasingStyle.Back)
+
+	local result
+	local function say(msg, color)
+		status.Visible = true
+		status.Text = msg
+		status.TextColor3 = color or T().SubText
+	end
+	if getKey then
+		getKey.MouseButton1Click:Connect(function()
+			local copied = pcall(function() setclipboard(o.KeyLink) end)
+			say(copied and "Key link copied to your clipboard." or ("Get your key at: " .. o.KeyLink), T().Accent)
+		end)
+	end
+	local function try()
+		if valid(input.Text) then
+			if o.SaveKey ~= false and hasFS() then
+				pcall(function()
+					ensureFolder(OrcaHub.Folder)
+					writefile(savePath, input.Text)
+				end)
+			end
+			say("Key accepted!", rgb(74, 222, 128))
+			tween(cardStroke, { Color = rgb(74, 222, 128) }, 0.2)
+			task.wait(0.5)
+			result = true
+		else
+			say("Invalid key, try again.", rgb(248, 113, 113))
+			tween(cardStroke, { Color = rgb(248, 113, 113) }, 0.15)
+			local base = card.Position
+			for _, dx in ipairs({ -8, 8, -5, 5, 0 }) do
+				card.Position = base + UDim2.fromOffset(dx, 0)
+				task.wait(0.04)
+			end
+			card.Position = base
+			task.delay(0.6, function() if result == nil then tween(cardStroke, { Color = T().StrokeLight }, 0.3) end end)
+		end
+	end
+	submit.MouseButton1Click:Connect(function() task.spawn(try) end)
+	input.FocusLost:Connect(function(enter) if enter then task.spawn(try) end end)
+	input.Focused:Connect(function() tween(boxStroke, { Color = T().Accent }) end)
+	input.FocusLost:Connect(function() tween(boxStroke, { Color = T().Stroke }) end)
+
+	while result == nil do task.wait(0.05) end
+	tween(cardScale, { Scale = 0.9 }, 0.2)
+	tween(backdrop, { BackgroundTransparency = 1 }, 0.2)
+	task.wait(0.2)
+	gui:Destroy()
+	return result
+end
+
 ---------------------------------------------------------------- window
 
 function OrcaHub:CreateWindow(opts)
 	opts = opts or {}
 	local env = (type(getgenv) == "function" and getgenv()) or _G
-	if env.__OrcaHubWindow then pcall(function() env.__OrcaHubWindow:Destroy() end) end
+	if env.__OrcaHubWindow then pcall(function() env.__OrcaHubWindow:Destroy(true) end) end
 
 	if opts.Theme then self:SetTheme(opts.Theme) end
 	if opts.Folder then self.Folder = opts.Folder end
@@ -468,14 +676,18 @@ function OrcaHub:CreateWindow(opts)
 	local Window = {
 		Tabs = {},
 		Conns = {},
+		Keybinds = {},
 		Visible = true,
 		UserScale = 1,
 		Scale = 1,
 		ToggleKey = opts.ToggleKey or Enum.KeyCode.RightShift,
 		Compact = opts.Compact,
+		Accordion = opts.Accordion == true,
+		SectionsCollapsed = opts.SectionsCollapsed,
 		LayoutPath = self.Folder .. "/layouts/" .. tostring(opts.ConfigKey or game.PlaceId) .. ".json",
 	}
 	if Window.Compact == nil then Window.Compact = MOBILE end
+	if Window.SectionsCollapsed == nil then Window.SectionsCollapsed = MOBILE end
 	Window.SavedLayout = readJSON(Window.LayoutPath) or {}
 	self.Window = Window
 	env.__OrcaHubWindow = Window
@@ -485,25 +697,20 @@ function OrcaHub:CreateWindow(opts)
 		return conn
 	end
 	Window._track = track
+	Pointer.start()
 
-	local size = opts.Size or (MOBILE and Vector2.new(640, 380) or Vector2.new(780, 500))
+	local function autoSize()
+		local vp = viewport()
+		return Vector2.new(math.clamp(vp.X - 24, 420, 900), math.clamp(vp.Y - 24, 280, 560))
+	end
+	local size = opts.Size or (MOBILE and autoSize() or Vector2.new(780, 500))
 	if typeof(size) == "UDim2" then size = Vector2.new(size.X.Offset, size.Y.Offset) end
 	Window.Size = size
+	Window.AutoSize = MOBILE and opts.Size == nil
 
-	local gui = create("ScreenGui", {
-		Name = HttpService:GenerateGUID(false),
-		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-		ResetOnSpawn = false,
-		IgnoreGuiInset = false,
-		DisplayOrder = 100,
-	})
-	pcall(function()
-		if syn and syn.protect_gui then syn.protect_gui(gui) end
-	end)
-	gui.Parent = guiParent()
+	local gui = newScreenGui(100)
 	Window.Gui = gui
 
-	-- notifications
 	Window.NotifyHolder = create("Frame", {
 		Parent = gui, BackgroundTransparency = 1, ZIndex = 20,
 		AnchorPoint = MOBILE and Vector2.new(1, 0) or Vector2.new(1, 1),
@@ -516,7 +723,8 @@ function OrcaHub:CreateWindow(opts)
 		}),
 	})
 
-	-- window shell
+	---------------------------------------------------------------- shell
+
 	local holder = create("Frame", {
 		Parent = gui, BackgroundTransparency = 1,
 		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
@@ -557,12 +765,13 @@ function OrcaHub:CreateWindow(opts)
 		Theme = { BackgroundColor3 = "Background" },
 	}, { corner(12) })
 
-	-- popup overlay (dropdowns, colour pickers, dialogs)
+	-- overlay for popups, dialogs and tooltips
 	local overlay = create("Frame", { Parent = main, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 40 })
 	local catcher = create("TextButton", {
 		Parent = overlay, Text = "", AutoButtonColor = false, BackgroundTransparency = 1,
 		Size = UDim2.fromScale(1, 1), Visible = false,
 	})
+	Window.Overlay = overlay
 	local activePopup
 	function Window:_closePopup()
 		if activePopup then
@@ -577,12 +786,41 @@ function OrcaHub:CreateWindow(opts)
 		activePopup = popup
 		catcher.Visible = true
 	end
+	function Window:_repositionPopup()
+		if activePopup and activePopup.Reposition then activePopup.Reposition() end
+	end
 	catcher.MouseButton1Click:Connect(function() Window:_closePopup() end)
 
 	function Window:_toMain(absPos)
 		return (absPos - main.AbsolutePosition) / self.Scale
 	end
-	Window.Overlay = overlay
+
+	-- element tooltips
+	local tipBubble = text({
+		Parent = overlay, Text = "", TextSize = 12, Visible = false, ZIndex = 9, TextWrapped = true,
+		Size = UDim2.fromOffset(220, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 0,
+		Theme = { BackgroundColor3 = "Element", TextColor3 = "SubText" },
+	})
+	corner(6).Parent = tipBubble
+	stroke("StrokeLight").Parent = tipBubble
+	padding(7, 10, 7, 10).Parent = tipBubble
+	local tipToken = 0
+	function Window:_showTip(anchor, message)
+		tipToken = tipToken + 1
+		local token = tipToken
+		tipBubble.Text = message
+		local pos = self:_toMain(anchor.AbsolutePosition)
+		local mainW = main.AbsoluteSize.X / self.Scale
+		tipBubble.Position = UDim2.fromOffset(math.clamp(pos.X - 100, 8, mainW - 228), pos.Y + anchor.AbsoluteSize.Y / self.Scale + 6)
+		tipBubble.Visible = true
+		tipBubble.TextTransparency = 1
+		tipBubble.BackgroundTransparency = 1
+		tween(tipBubble, { TextTransparency = 0, BackgroundTransparency = 0 }, 0.15)
+		if MOBILE then
+			task.delay(3, function() if tipToken == token then tipBubble.Visible = false end end)
+		end
+	end
+	function Window:_hideTip() tipBubble.Visible = false end
 
 	---------------------------------------------------------------- sidebar
 
@@ -614,18 +852,19 @@ function OrcaHub:CreateWindow(opts)
 	local brandTitle = text({
 		Parent = brand, Text = opts.Title or "OrcaHub", Weight = "Bold", TextSize = 15,
 		Position = UDim2.new(0, 56, 0.5, -15), Size = UDim2.new(1, -64, 0, 18),
+		TextTransparency = Window.Compact and 1 or 0,
 	})
 	local brandSub = text({
 		Parent = brand, Text = opts.Subtitle or ("v" .. OrcaHub.Version), TextSize = 11,
 		Position = UDim2.new(0, 56, 0.5, 3), Size = UDim2.new(1, -64, 0, 14),
-		Theme = { TextColor3 = "DimText" },
+		Theme = { TextColor3 = "DimText" }, TextTransparency = Window.Compact and 1 or 0,
 	})
 	create("Frame", {
 		Parent = brand, BorderSizePixel = 0, Position = UDim2.new(0, 0, 1, -1), Size = UDim2.new(1, 0, 0, 1),
 		Theme = { BackgroundColor3 = "Stroke" },
 	})
 
-	local profileH = opts.ShowProfile == false and 0 or 60
+	local profileH = (opts.ShowProfile == false or MOBILE) and 0 or 60
 	local tabArea = create("Frame", {
 		Parent = sidebar, BackgroundTransparency = 1,
 		Position = UDim2.fromOffset(0, TOPBAR_H), Size = UDim2.new(1, -1, 1, -TOPBAR_H - profileH),
@@ -666,22 +905,23 @@ function OrcaHub:CreateWindow(opts)
 			local ok, img = pcall(function()
 				return Players:GetUserThumbnailAsync(LocalPlayer.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size48x48)
 			end)
-			if ok then avatar.Image = img end
+			if ok and avatar.Parent then avatar.Image = img end
 		end)
 		local display = text({
 			Parent = profile, Text = LocalPlayer.DisplayName, Weight = "Medium", TextSize = 13,
 			Position = UDim2.new(0, 56, 0.5, -15), Size = UDim2.new(1, -64, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd,
+			TextTransparency = Window.Compact and 1 or 0,
 		})
 		local username = text({
 			Parent = profile, Text = "@" .. LocalPlayer.Name, TextSize = 11,
 			Position = UDim2.new(0, 56, 0.5, 2), Size = UDim2.new(1, -64, 0, 14), TextTruncate = Enum.TextTruncate.AtEnd,
-			Theme = { TextColor3 = "DimText" },
+			Theme = { TextColor3 = "DimText" }, TextTransparency = Window.Compact and 1 or 0,
 		})
 		table.insert(fadeLabels, display)
 		table.insert(fadeLabels, username)
 	end
 
-	---------------------------------------------------------------- content
+	---------------------------------------------------------------- content area
 
 	local content = create("Frame", {
 		Parent = main, BackgroundTransparency = 1,
@@ -721,7 +961,7 @@ function OrcaHub:CreateWindow(opts)
 	local pageDesc = text({
 		Parent = topbar, Text = "", TextSize = 12,
 		Position = UDim2.fromOffset(52, 31), Size = UDim2.new(1, -330, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd,
-		Theme = { TextColor3 = "DimText" },
+		Theme = { TextColor3 = "DimText" }, Visible = not MOBILE,
 	})
 
 	local closeBtn = iconButton("x", UDim2.new(1, -42, 0.5, 0), rgb(248, 113, 113))
@@ -736,12 +976,22 @@ function OrcaHub:CreateWindow(opts)
 	searchStroke.Parent = search
 	Icon("search", 14, "DimText", { Parent = search, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 10, 0.5, 0) })
 	local searchBox = text({
-		Class = "TextBox", Parent = search, Text = "", PlaceholderText = "Search...", ClearTextOnFocus = false,
+		Class = "TextBox", Parent = search, Text = "", PlaceholderText = "Search all tabs...", ClearTextOnFocus = false,
 		Position = UDim2.fromOffset(32, 0), Size = UDim2.new(1, -40, 1, 0),
 		Theme = { TextColor3 = "Text", PlaceholderColor3 = "DimText" },
 	})
 	searchBox.Focused:Connect(function() tween(searchStroke, { Color = T().Accent }) end)
 	searchBox.FocusLost:Connect(function() tween(searchStroke, { Color = T().Stroke }) end)
+	local clearSearch = create("TextButton", {
+		Parent = search, Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Visible = false,
+		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(22, 22),
+	})
+	Icon("x", 13, "DimText", { Parent = clearSearch, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5) })
+	clearSearch.MouseButton1Click:Connect(function() searchBox.Text = "" end)
+	searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+		clearSearch.Visible = searchBox.Text ~= ""
+		searchBox.Size = UDim2.new(1, searchBox.Text ~= "" and -60 or -40, 1, 0)
+	end)
 
 	local pages = create("Frame", {
 		Parent = content, BackgroundTransparency = 1, ClipsDescendants = true,
@@ -769,6 +1019,10 @@ function OrcaHub:CreateWindow(opts)
 	---------------------------------------------------------------- scaling, dragging, resizing
 
 	function Window:_updateScale()
+		if self.AutoSize then
+			self.Size = autoSize()
+			holder.Size = UDim2.fromOffset(self.Size.X, self.Size.Y)
+		end
 		local vp = viewport()
 		local fit = math.min(1, (vp.X - 24) / self.Size.X, (vp.Y - 24) / self.Size.Y)
 		self.Scale = math.max(0.4, fit) * self.UserScale
@@ -785,30 +1039,21 @@ function OrcaHub:CreateWindow(opts)
 		return math.clamp(x, -maxX, maxX), math.clamp(y, math.min(minY, maxY), maxY)
 	end
 
-	local function dragFrom(handle, onStart)
+	local function dragWindowFrom(handle)
 		handle.InputBegan:Connect(function(input)
 			if not isPress(input) then return end
 			local start = vec2(input.Position)
 			local startPos = holder.Position
-			if onStart then onStart() end
-			local moveConn, endConn
-			moveConn = track(UserInputService.InputChanged:Connect(function(i)
-				if isMove(i, input.UserInputType == Enum.UserInputType.Touch and input or nil) then
-					local d = vec2(i.Position) - start
-					local x, y = clampPosition(startPos.X.Offset + d.X, startPos.Y.Offset + d.Y)
-					holder.Position = UDim2.new(0.5, x, 0.5, y)
-				end
-			end))
-			endConn = track(UserInputService.InputEnded:Connect(function(i)
-				if i == input or i.UserInputType == Enum.UserInputType.MouseButton1 then
-					moveConn:Disconnect()
-					endConn:Disconnect()
-				end
-			end))
+			Window:_closePopup()
+			Pointer.track(input, function(pos)
+				local d = pos - start
+				local x, y = clampPosition(startPos.X.Offset + d.X, startPos.Y.Offset + d.Y)
+				holder.Position = UDim2.new(0.5, x, 0.5, y)
+			end)
 		end)
 	end
-	dragFrom(topbar, function() Window:_closePopup() end)
-	dragFrom(brand, function() Window:_closePopup() end)
+	dragWindowFrom(topbar)
+	dragWindowFrom(brand)
 
 	if not MOBILE then
 		local grip = create("TextButton", {
@@ -824,20 +1069,11 @@ function OrcaHub:CreateWindow(opts)
 			if not isPress(input) then return end
 			local start = vec2(input.Position)
 			local startSize = Window.Size
-			local moveConn, endConn
-			moveConn = track(UserInputService.InputChanged:Connect(function(i)
-				if isMove(i) then
-					local d = (vec2(i.Position) - start) / Window.Scale
-					Window.Size = Vector2.new(math.max(600, startSize.X + d.X), math.max(380, startSize.Y + d.Y))
-					holder.Size = UDim2.fromOffset(Window.Size.X, Window.Size.Y)
-				end
-			end))
-			endConn = track(UserInputService.InputEnded:Connect(function(i)
-				if i.UserInputType == Enum.UserInputType.MouseButton1 then
-					moveConn:Disconnect()
-					endConn:Disconnect()
-				end
-			end))
+			Pointer.track(input, function(pos)
+				local d = (pos - start) / Window.Scale
+				Window.Size = Vector2.new(math.max(600, startSize.X + d.X), math.max(380, startSize.Y + d.Y))
+				holder.Size = UDim2.fromOffset(Window.Size.X, Window.Size.Y)
+			end)
 		end)
 	end
 
@@ -853,19 +1089,57 @@ function OrcaHub:CreateWindow(opts)
 		Window:_updateScale()
 	end))
 
-	---------------------------------------------------------------- visibility
+	---------------------------------------------------------------- floating toggle button
 
+	local fabAlways = opts.ToggleButton
+	if fabAlways == nil then fabAlways = MOBILE end
 	local fab = create("TextButton", {
 		Parent = gui, Text = "", AutoButtonColor = false, BackgroundColor3 = Color3.new(1, 1, 1),
-		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 44, 0.5, 0), Size = UDim2.fromOffset(48, 48),
-		Visible = MOBILE, ZIndex = 10,
-	}, { corner(14), accentGradient(45) })
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = env.__OrcaHubFabPosition or UDim2.new(0, 40, 0.5, 0),
+		Size = UDim2.fromOffset(MOBILE and 52 or 46, MOBILE and 52 or 46),
+		Visible = fabAlways, ZIndex = 10,
+	}, { corner(16), accentGradient(45) })
+	create("UIStroke", {
+		Parent = fab, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Color = Color3.new(1, 1, 1), Transparency = 0.75, Thickness = 1.5,
+	})
 	local fabScale = create("UIScale", { Parent = fab })
-	Icon(opts.Icon or opts.Logo or "waves", 22, nil, {
+	local fabIcon = Icon(opts.Icon or opts.Logo or "waves", 24, nil, {
 		Parent = fab, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 		ImageColor3 = Color3.new(1, 1, 1),
 	})
 	Window.ToggleButton = fab
+
+	fab.InputBegan:Connect(function(input)
+		if not isPress(input) then return end
+		local start = vec2(input.Position)
+		local startPos = fab.Position
+		local moved = false
+		tween(fabScale, { Scale = 0.9 }, 0.15)
+		Pointer.track(input, function(pos)
+			local d = pos - start
+			if d.Magnitude > 8 then moved = true end
+			if moved then
+				fab.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+			end
+		end, function()
+			tween(fabScale, { Scale = 1 }, 0.3, Enum.EasingStyle.Back)
+			if not moved then
+				Window:Toggle()
+				return
+			end
+			-- snap to the nearest side and keep it on screen
+			local vp = viewport()
+			local centre = fab.AbsolutePosition + fab.AbsoluteSize / 2
+			local half = fab.AbsoluteSize.X / 2 + 12
+			local x = centre.X < vp.X / 2 and half or (vp.X - half)
+			local y = math.clamp(centre.Y, half, vp.Y - half - 40)
+			local target = UDim2.fromOffset(x, y)
+			tween(fab, { Position = target }, 0.35, Enum.EasingStyle.Back)
+			env.__OrcaHubFabPosition = target
+		end)
+	end)
+
+	---------------------------------------------------------------- visibility
 
 	function Window:SetVisible(v)
 		if v == self.Visible then return end
@@ -878,46 +1152,40 @@ function OrcaHub:CreateWindow(opts)
 			tween(cover, { BackgroundTransparency = 1 }, 0.3)
 		else
 			self:_closePopup()
+			self:_hideTip()
 			tween(uiScale, { Scale = self.Scale * 0.94 }, 0.2, Enum.EasingStyle.Quint, Enum.EasingDirection.In)
 			tween(cover, { BackgroundTransparency = 0 }, 0.18).Completed:Connect(function()
 				if not self.Visible then holder.Visible = false end
 			end)
 		end
-		if not MOBILE then fab.Visible = not v end
+		fab.Visible = fabAlways or not v
+		tween(fabIcon, { Rotation = v and 0 or 180 }, 0.35)
 	end
 
 	function Window:Toggle() self:SetVisible(not self.Visible) end
-
 	function Window:SetToggleKey(key) self.ToggleKey = key end
-
-	do
-		local pressed, start, startPos, moved = nil, nil, nil, false
-		fab.InputBegan:Connect(function(input)
-			if not isPress(input) then return end
-			pressed, start, startPos, moved = input, vec2(input.Position), fab.Position, false
-			tween(fabScale, { Scale = 0.9 }, 0.15)
-		end)
-		track(UserInputService.InputChanged:Connect(function(i)
-			if pressed and isMove(i, pressed.UserInputType == Enum.UserInputType.Touch and pressed or nil) then
-				local d = vec2(i.Position) - start
-				if d.Magnitude > 6 then moved = true end
-				if moved then
-					fab.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
-				end
-			end
-		end))
-		track(UserInputService.InputEnded:Connect(function(i)
-			if pressed and (i == pressed or i.UserInputType == Enum.UserInputType.MouseButton1) then
-				pressed = nil
-				tween(fabScale, { Scale = 1 }, 0.3, Enum.EasingStyle.Back)
-				if not moved then Window:Toggle() end
-			end
-		end))
+	function Window:SetToggleButtonVisible(v)
+		fabAlways = v
+		fab.Visible = v or not self.Visible
 	end
 
+	-- one keyboard listener for the toggle key and every keybind
 	track(UserInputService.InputBegan:Connect(function(input, processed)
-		if processed or Window._capturing then return end
+		if Window._capturing then
+			if input.UserInputType == Enum.UserInputType.Keyboard then Window._capturing(input.KeyCode) end
+			return
+		end
+		if processed or input.UserInputType ~= Enum.UserInputType.Keyboard then return end
 		if input.KeyCode == Window.ToggleKey then Window:Toggle() end
+		for _, kb in ipairs(Window.Keybinds) do
+			if kb.Key ~= Enum.KeyCode.Unknown and input.KeyCode == kb.Key then kb.Pressed() end
+		end
+	end))
+	track(UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+		for _, kb in ipairs(Window.Keybinds) do
+			if kb.Released and input.KeyCode == kb.Key then kb.Released() end
+		end
 	end))
 
 	minBtn.MouseButton1Click:Connect(function()
@@ -979,14 +1247,10 @@ function OrcaHub:CreateWindow(opts)
 				BackgroundTransparency = 0, BackgroundColor3 = Color3.new(1, 1, 1),
 				Theme = (not primary) and { BackgroundColor3 = "Element", TextColor3 = "Text" } or false,
 				TextColor3 = Color3.new(1, 1, 1),
-			}, nil)
+			})
 			corner(8).Parent = btn
 			padding(0, 16, 0, 16).Parent = btn
-			if primary then
-				accentGradient(0).Parent = btn
-			else
-				stroke("StrokeLight").Parent = btn
-			end
+			if primary then accentGradient(0).Parent = btn else stroke("StrokeLight").Parent = btn end
 			btn.MouseButton1Click:Connect(function()
 				close()
 				safeCall(b.Callback)
@@ -1023,14 +1287,14 @@ function OrcaHub:CreateWindow(opts)
 	tabList:GetPropertyChangedSignal("CanvasPosition"):Connect(function() Window:_moveIndicator(false) end)
 	tabArea:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() Window:_moveIndicator(false) end)
 
-	local tooltip = text({
+	local sideTip = text({
 		Parent = overlay, Text = "", TextSize = 12, Weight = "Medium", Visible = false, ZIndex = 8,
 		Size = UDim2.fromOffset(0, 26), AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 0,
 		Theme = { BackgroundColor3 = "Element", TextColor3 = "Text" },
 	})
-	corner(6).Parent = tooltip
-	stroke("StrokeLight").Parent = tooltip
-	padding(0, 10, 0, 10).Parent = tooltip
+	corner(6).Parent = sideTip
+	stroke("StrokeLight").Parent = sideTip
+	padding(0, 10, 0, 10).Parent = sideTip
 
 	function Window:SetCompact(v, instant)
 		self.Compact = v
@@ -1042,7 +1306,7 @@ function OrcaHub:CreateWindow(opts)
 			set(lbl, { TextTransparency = v and 1 or 0 }, not instant, t * 0.6)
 		end
 		task.delay(t + 0.05, function()
-			for _, tab in ipairs(self.Tabs) do tab:_queueLayout(false) end
+			for _, tab in ipairs(self.Tabs) do tab:_relayout(false) end
 			self:_moveIndicator(false)
 		end)
 	end
@@ -1066,184 +1330,114 @@ function OrcaHub:CreateWindow(opts)
 
 	---------------------------------------------------------------- layout persistence
 
+	local containers = {}
+
 	function Window:SaveLayout()
 		local data = {}
-		for _, tab in ipairs(self.Tabs) do
+		for _, c in ipairs(containers) do
 			local entry = { columns = { {}, {} }, collapsed = {} }
 			for ci = 1, 2 do
-				for _, s in ipairs(tab.Columns[ci]) do table.insert(entry.columns[ci], s.Name) end
+				for _, s in ipairs(c.Columns[ci]) do table.insert(entry.columns[ci], s.Name) end
 			end
-			for _, s in ipairs(tab.Sections) do
-				if s.Collapsed then entry.collapsed[s.Name] = true end
+			for _, s in ipairs(c.Sections) do
+				entry.collapsed[s.Name] = s.Collapsed
 			end
-			data[tab.Name] = entry
+			data[c.Key] = entry
 		end
 		self.SavedLayout = data
 		writeJSON(self.LayoutPath, data)
 	end
 
 	function Window:ResetLayout()
-		for _, tab in ipairs(self.Tabs) do
-			tab.Columns = { {}, {} }
-			for _, s in ipairs(tab.Sections) do
-				table.insert(tab.Columns[s.DefaultSide], s)
-				if s.Collapsed then s:SetCollapsed(false, true) end
+		for _, c in ipairs(containers) do
+			c.Columns = { {}, {} }
+			for _, s in ipairs(c.Sections) do
+				table.insert(c.Columns[s.DefaultSide], s)
+				if s.Collapsed ~= s.DefaultCollapsed then s:SetCollapsed(s.DefaultCollapsed, true) end
 			end
-			tab:_layout(true)
+			c:_layout(true)
 		end
 		self.SavedLayout = {}
-		if hasFS() and type(delfile) == "function" and isfile(self.LayoutPath) then pcall(delfile, self.LayoutPath) end
+		if hasFS() and type(delfile) == "function" then
+			pcall(function() if isfile(self.LayoutPath) then delfile(self.LayoutPath) end end)
+		end
 	end
 
-	---------------------------------------------------------------- search
+	---------------------------------------------------------------- search (all tabs)
 
-	searchBox:GetPropertyChangedSignal("Text"):Connect(function()
-		local tab = Window.CurrentTab
-		if not tab then return end
+	local function applySearch()
 		local q = string.lower((string.gsub(searchBox.Text, "^%s+", "")))
+		q = string.gsub(q, "%s+$", "")
 		Window._searching = q ~= ""
-		for _, section in ipairs(tab.Sections) do
-			local sectionMatch = q ~= "" and string.find(string.lower(section.Name), q, 1, true) ~= nil
-			local any = false
-			for _, el in ipairs(section.Elements) do
-				local show = q == "" or sectionMatch or string.find(el.SearchText, q, 1, true) ~= nil
-				el.Row.Visible = show
-				if show then any = true end
+		Window:_closePopup()
+		for _, tab in ipairs(Window.Tabs) do
+			local tabCount = 0
+			for _, c in ipairs(tab.Containers) do
+				local count = 0
+				for _, section in ipairs(c.Sections) do
+					local sectionMatch = q ~= "" and string.find(string.lower(section.Name), q, 1, true) ~= nil
+					local any = false
+					for _, el in ipairs(section.Elements) do
+						local show = q == "" or sectionMatch or string.find(el.SearchText, q, 1, true) ~= nil
+						el.Row.Visible = show
+						if show and el.Type ~= "Divider" then
+							any = true
+							if q ~= "" then count = count + 1 end
+						end
+					end
+					section.Frame.Visible = q == "" or any or sectionMatch
+					section:_resize(false)
+				end
+				c:_setBadge(q ~= "" and count or nil)
+				c:_setEmpty(q ~= "" and count == 0, searchBox.Text)
+				c:_layout(false)
+				tabCount = tabCount + count
 			end
-			section.Frame.Visible = q == "" or any or sectionMatch
+			tab:_setBadge(q ~= "" and tabCount or nil)
 		end
-		tab:_layout(true)
-	end)
+	end
+	searchBox:GetPropertyChangedSignal("Text"):Connect(applySearch)
 
-	---------------------------------------------------------------- tabs
+	---------------------------------------------------------------- containers (a page of draggable sections)
 
-	function Window:Tab(o)
-		o = o or {}
-		local Tab = {
-			Name = o.Name or "Tab",
-			Description = o.Description or "",
-			Sections = {},
-			Columns = { {}, {} },
-			Window = Window,
-		}
-		local saved = Window.SavedLayout[Tab.Name]
+	local function Container(page, key, onBadge)
+		local C = { Key = key, Sections = {}, Columns = { {}, {} }, Page = page }
+		table.insert(containers, C)
+		local saved = Window.SavedLayout[key]
 
-		local btn = create("TextButton", {
-			Parent = tabList, Text = "", AutoButtonColor = false, BackgroundTransparency = 1,
-			Size = UDim2.new(1, 0, 0, TAB_H), LayoutOrder = nextOrder(),
-		})
-		Tab.Button = btn
-		local iconInst
-		if iconImage(o.Icon) then
-			iconInst = Icon(o.Icon, 18, nil, {
-				Parent = btn, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 13, 0.5, 0),
-				ImageColor3 = T().DimText,
-			})
-		else
-			iconInst = text({
-				Parent = btn, Text = string.upper(string.sub(Tab.Name, 1, 1)), Weight = "Bold", TextSize = 15,
-				AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 13, 0.5, 0), Size = UDim2.fromOffset(18, 18),
-				TextXAlignment = Enum.TextXAlignment.Center, Theme = false, TextColor3 = T().DimText,
-			})
-		end
-		local iconProp = iconInst:IsA("ImageLabel") and "ImageColor3" or "TextColor3"
-		local label = text({
-			Parent = btn, Text = Tab.Name, TextSize = 13, Weight = "Medium",
-			Position = UDim2.fromOffset(42, 0), Size = UDim2.new(1, -46, 1, 0),
-			Theme = false, TextColor3 = T().SubText, TextTransparency = Window.Compact and 1 or 0,
-			TextTruncate = Enum.TextTruncate.AtEnd,
-		})
-		table.insert(fadeLabels, label)
-
-		local page = create("ScrollingFrame", {
-			Parent = pages, BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false,
-			Size = UDim2.fromScale(1, 1), CanvasSize = UDim2.new(),
-			ScrollBarThickness = 3, ScrollingDirection = Enum.ScrollingDirection.Y,
-			Theme = { ScrollBarImageColor3 = "StrokeLight" },
-		})
 		local origin = create("Frame", { Parent = page, BackgroundTransparency = 1, Size = UDim2.fromOffset(0, 0) })
 		local placeholder = create("Frame", {
 			Parent = page, Visible = false, BackgroundTransparency = 0.92,
 			Theme = { BackgroundColor3 = "Accent" },
 		}, { corner(10) })
-		local placeholderStroke = create("UIStroke", {
+		create("UIStroke", {
 			Parent = placeholder, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Transparency = 0.4,
 			Theme = { Color = "Accent" },
 		})
-		placeholderStroke.Thickness = 1
-		Tab.Page = page
+		local empty = text({
+			Parent = page, Text = "", TextSize = 13, Visible = false, TextXAlignment = Enum.TextXAlignment.Center,
+			Size = UDim2.new(1, 0, 0, 60), Position = UDim2.fromOffset(0, 40), Theme = { TextColor3 = "DimText" },
+		})
 
-		local function renderTab(active, animate)
-			set(label, { TextColor3 = active and T().Text or T().SubText }, animate)
-			set(iconInst, { [iconProp] = active and T().Accent or T().DimText }, animate)
+		function C:_setEmpty(v, query)
+			empty.Visible = v
+			empty.Text = "No results for \"" .. tostring(query) .. "\""
 		end
-		table.insert(Refreshers, function() renderTab(Window.CurrentTab == Tab, false) end)
-
-		btn.MouseEnter:Connect(function()
-			if Window.CurrentTab ~= Tab then tween(label, { TextColor3 = T().Text }) end
-			if Window.Compact and not MOBILE then
-				local pos = Window:_toMain(btn.AbsolutePosition)
-				tooltip.Text = Tab.Name
-				tooltip.Position = UDim2.fromOffset(SIDEBAR_COMPACT + 6, pos.Y + (TAB_H - 26) / 2)
-				tooltip.Visible = true
-			end
-		end)
-		btn.MouseLeave:Connect(function()
-			if Window.CurrentTab ~= Tab then tween(label, { TextColor3 = T().SubText }) end
-			tooltip.Visible = false
-		end)
-
-		function Tab:Select()
-			if Window.CurrentTab == Tab then return end
-			Window:_closePopup()
-			local prev = Window.CurrentTab
-			Window.CurrentTab = Tab
-			if prev then
-				prev:_render(false)
-				prev.Page.Visible = false
-			end
-			renderTab(true, true)
-			pageTitle.Text = Tab.Name
-			pageDesc.Text = Tab.Description
-			pageTitle.Position = UDim2.fromOffset(52, Tab.Description == "" and 19 or 11)
-			pageTitle.TextTransparency = 1
-			pageDesc.TextTransparency = 1
-			tween(pageTitle, { TextTransparency = 0 }, 0.3)
-			tween(pageDesc, { TextTransparency = 0 }, 0.4)
-
-			page.Visible = true
-			page.Position = UDim2.fromOffset(0, 16)
-			tween(page, { Position = UDim2.fromOffset(0, 0) }, 0.4)
-			pageCover.Visible = true
-			pageCover.BackgroundTransparency = 0
-			tween(pageCover, { BackgroundTransparency = 1 }, 0.3).Completed:Connect(function()
-				if pageCover.BackgroundTransparency >= 1 then pageCover.Visible = false end
-			end)
-
-			if searchBox.Text ~= "" then searchBox.Text = "" end
-			Tab:_layout(false)
-			task.defer(function() Window:_moveIndicator(prev ~= nil) end)
+		function C:_setBadge(n)
+			if onBadge then onBadge(n) end
 		end
 
-		function Tab:_render(active)
-			renderTab(active, true)
-		end
-
-		btn.MouseButton1Click:Connect(function() Tab:Select() end)
-
-		---------------------------------------------------- masonry layout
-
-		function Tab:_layout(animate)
+		function C:_layout(animate)
 			local width = page.AbsoluteWindowSize.X / Window.Scale
 			if width <= 0 then return end
-			local single = width < 540
-			Tab.Single = single
+			local single = width < SINGLE_COLUMN_BELOW
+			C.Single = single
 			local colW = single and (width - PAD * 2) or math.floor((width - PAD * 2 - GAP) / 2)
-			local lists = Tab.Columns
+			local lists = C.Columns
 			if single then
 				local merged = {}
 				for ci = 1, 2 do
-					for _, s in ipairs(Tab.Columns[ci]) do table.insert(merged, s) end
+					for _, s in ipairs(C.Columns[ci]) do table.insert(merged, s) end
 				end
 				lists = { merged }
 			end
@@ -1255,12 +1449,11 @@ function OrcaHub:CreateWindow(opts)
 					if s.Frame.Visible then
 						local h = s:_height()
 						s._targetX, s._targetY, s._width = x, y, colW
-						if s == Tab._dragging then
+						s.Frame.Size = UDim2.fromOffset(colW, s.Frame.Size.Y.Offset)
+						if s == C._dragging then
 							placeholder.Position = UDim2.fromOffset(x, y)
 							placeholder.Size = UDim2.fromOffset(colW, h)
-							s.Frame.Size = UDim2.fromOffset(colW, s.Frame.Size.Y.Offset)
 						else
-							s.Frame.Size = UDim2.fromOffset(colW, s.Frame.Size.Y.Offset)
 							set(s.Frame, { Position = UDim2.fromOffset(x, y) }, animate, 0.35)
 						end
 						y = y + h + GAP
@@ -1271,32 +1464,31 @@ function OrcaHub:CreateWindow(opts)
 			page.CanvasSize = UDim2.fromOffset(0, math.max(0, maxY - GAP + PAD))
 		end
 
-		function Tab:_queueLayout(animate)
-			if Tab._queued then
-				Tab._queuedAnimate = Tab._queuedAnimate or animate
+		function C:_queueLayout(animate)
+			if C._queued then
+				C._queuedAnimate = C._queuedAnimate or animate
 				return
 			end
-			Tab._queued, Tab._queuedAnimate = true, animate
+			C._queued, C._queuedAnimate = true, animate
 			task.defer(function()
-				Tab._queued = false
-				Tab:_layout(Tab._queuedAnimate)
+				C._queued = false
+				C:_layout(C._queuedAnimate)
 			end)
 		end
 
-		page:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(function() Tab:_queueLayout(false) end)
+		page:GetPropertyChangedSignal("AbsoluteWindowSize"):Connect(function() C:_queueLayout(false) end)
 		page:GetPropertyChangedSignal("CanvasPosition"):Connect(function()
-			if not Tab._dragging then Window:_closePopup() end
+			if not C._dragging then Window:_repositionPopup() end
+			Window:_hideTip()
 		end)
-
-		---------------------------------------------------- section dragging
 
 		local function canvasPoint(screenPos)
 			return (screenPos - origin.AbsolutePosition) / Window.Scale
 		end
 
-		function Tab:_startDrag(section, pressInput, startScreen)
+		function C:_startDrag(section, pressInput, startScreen)
 			Window:_closePopup()
-			Tab._dragging = section
+			C._dragging = section
 			local frame = section.Frame
 			local grab = canvasPoint(startScreen) - Vector2.new(frame.Position.X.Offset, frame.Position.Y.Offset)
 			local pointer = startScreen
@@ -1305,22 +1497,21 @@ function OrcaHub:CreateWindow(opts)
 			tween(section._stroke, { Color = T().Accent }, 0.2)
 			page.ScrollingEnabled = false
 			placeholder.Visible = true
-			placeholder.ZIndex = 1
-			Tab:_layout(true)
+			C:_layout(true)
 
 			local function location()
 				for ci = 1, 2 do
-					for i, s in ipairs(Tab.Columns[ci]) do
+					for i, s in ipairs(C.Columns[ci]) do
 						if s == section then return ci, i end
 					end
 				end
 			end
 
 			local function target(p)
-				if Tab.Single then
+				if C.Single then
 					local count, c1 = 0, 0
 					for ci = 1, 2 do
-						for _, s in ipairs(Tab.Columns[ci]) do
+						for _, s in ipairs(C.Columns[ci]) do
 							if s ~= section then
 								if ci == 1 then c1 = c1 + 1 end
 								if s.Frame.Visible and p.Y > s._targetY + s:_height() / 2 then count = count + 1 end
@@ -1333,7 +1524,7 @@ function OrcaHub:CreateWindow(opts)
 				local width = page.AbsoluteWindowSize.X / Window.Scale
 				local ci = p.X > width / 2 and 2 or 1
 				local idx = 1
-				for _, s in ipairs(Tab.Columns[ci]) do
+				for _, s in ipairs(C.Columns[ci]) do
 					if s ~= section and s.Frame.Visible and p.Y > s._targetY + s:_height() / 2 then idx = idx + 1 end
 				end
 				return ci, idx
@@ -1342,25 +1533,17 @@ function OrcaHub:CreateWindow(opts)
 			local function update()
 				local p = canvasPoint(pointer)
 				frame.Position = UDim2.fromOffset(p.X - grab.X, p.Y - grab.Y)
-				local center = Vector2.new(p.X - grab.X + frame.Size.X.Offset / 2, p.Y - grab.Y + section:_height() / 2)
-				local ci, idx = target(center)
+				local centre = Vector2.new(p.X - grab.X + frame.Size.X.Offset / 2, p.Y - grab.Y + section:_height() / 2)
+				local ci, idx = target(centre)
 				local curC, curI = location()
 				if ci ~= curC or idx ~= curI then
-					table.remove(Tab.Columns[curC], curI)
-					table.insert(Tab.Columns[ci], math.min(idx, #Tab.Columns[ci] + 1), section)
-					Tab:_layout(true)
+					table.remove(C.Columns[curC], curI)
+					table.insert(C.Columns[ci], math.min(idx, #C.Columns[ci] + 1), section)
+					C:_layout(true)
 				end
 			end
 
-			local moveConn, endConn, stepConn
-			local touch = pressInput.UserInputType == Enum.UserInputType.Touch
-			moveConn = track(UserInputService.InputChanged:Connect(function(i)
-				if isMove(i, touch and pressInput or nil) then
-					pointer = vec2(i.Position)
-					update()
-				end
-			end))
-			stepConn = track(RunService.Heartbeat:Connect(function()
+			local stepConn = track(RunService.Heartbeat:Connect(function()
 				local top = page.AbsolutePosition.Y
 				local bottom = top + page.AbsoluteSize.Y
 				local delta = 0
@@ -1374,38 +1557,42 @@ function OrcaHub:CreateWindow(opts)
 					end
 				end
 			end))
-			endConn = track(UserInputService.InputEnded:Connect(function(i)
-				if i == pressInput or i.UserInputType == Enum.UserInputType.MouseButton1 then
-					moveConn:Disconnect()
-					endConn:Disconnect()
-					stepConn:Disconnect()
-					Tab._dragging = nil
-					page.ScrollingEnabled = true
-					placeholder.Visible = false
-					tween(section._scale, { Scale = 1 }, 0.3, Enum.EasingStyle.Back)
-					tween(section._stroke, { Color = T().Stroke }, 0.3)
-					Tab:_layout(true)
-					task.delay(0.36, function()
-						if Tab._dragging ~= section then frame.ZIndex = 1 end
-					end)
-					Window:SaveLayout()
-				end
-			end))
+
+			Pointer.track(pressInput, function(pos)
+				pointer = pos
+				update()
+			end, function()
+				stepConn:Disconnect()
+				C._dragging = nil
+				page.ScrollingEnabled = true
+				placeholder.Visible = false
+				tween(section._scale, { Scale = 1 }, 0.3, Enum.EasingStyle.Back)
+				tween(section._stroke, { Color = T().Stroke }, 0.3)
+				C:_layout(true)
+				task.delay(0.36, function()
+					if C._dragging ~= section then frame.ZIndex = 1 end
+				end)
+				Window:SaveLayout()
+			end)
 		end
 
-		---------------------------------------------------- sections
+		------------------------------------------------------------ sections
 
-		function Tab:Section(so)
+		function C:Section(so)
 			so = so or {}
 			local Section = {
 				Name = so.Name or "Section",
 				Elements = {},
-				Collapsed = false,
 				DefaultSide = (so.Side == "Right" or so.Side == 2) and 2 or 1,
 				_bodyH = 0,
 			}
-			local savedEntry = saved and saved.collapsed and saved.collapsed[Section.Name]
-			if so.Collapsed or savedEntry then Section.Collapsed = true end
+			local defaultCollapsed = so.Collapsed
+			if defaultCollapsed == nil then defaultCollapsed = Window.SectionsCollapsed end
+			Section.DefaultCollapsed = defaultCollapsed
+			Section.Collapsed = defaultCollapsed
+			if saved and saved.collapsed and saved.collapsed[Section.Name] ~= nil then
+				Section.Collapsed = saved.collapsed[Section.Name] == true
+			end
 
 			local frame = create("Frame", {
 				Parent = page, ClipsDescendants = true,
@@ -1417,11 +1604,14 @@ function OrcaHub:CreateWindow(opts)
 			Section._stroke.Parent = frame
 			Section._scale = create("UIScale", { Parent = frame })
 
-			local header = create("Frame", { Parent = frame, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, SECTION_HEADER) })
+			local header = create("Frame", {
+				Parent = frame, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, SECTION_HEADER),
+				Theme = { BackgroundColor3 = "ElementHover" },
+			})
 			Section.Header = header
 			local grip = Icon("grip-vertical", 14, "DimText", {
 				Parent = header, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 8, 0.5, 0),
-				ImageTransparency = MOBILE and 0.3 or 0.6,
+				ImageTransparency = MOBILE and 0.4 or 0.6,
 			})
 			local titleX = 26
 			if so.Icon and iconImage(so.Icon) then
@@ -1430,16 +1620,19 @@ function OrcaHub:CreateWindow(opts)
 			end
 			text({
 				Parent = header, Text = Section.Name, Weight = "SemiBold", TextSize = 13,
-				Position = UDim2.fromOffset(titleX, 0), Size = UDim2.new(1, -titleX - 40, 1, 0),
+				Position = UDim2.fromOffset(titleX, 0), Size = UDim2.new(1, -titleX - 74, 1, 0),
 				TextTruncate = Enum.TextTruncate.AtEnd,
 			})
-			local chevronBtn = create("TextButton", {
-				Parent = header, Text = "", AutoButtonColor = false, BackgroundTransparency = 1,
-				AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.fromOffset(26, 26),
-				Theme = { BackgroundColor3 = "Element" },
-			}, { corner(6) })
+			local countBadge = text({
+				Parent = header, Text = "", TextSize = 11, Weight = "Medium", TextXAlignment = Enum.TextXAlignment.Center,
+				AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -36, 0.5, 0), Size = UDim2.fromOffset(0, 18),
+				AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 0, Visible = false,
+				Theme = { BackgroundColor3 = "Element", TextColor3 = "SubText" },
+			})
+			corner(9).Parent = countBadge
+			padding(0, 7, 0, 7).Parent = countBadge
 			local chevron = Icon("chevron-down", 14, "DimText", {
-				Parent = chevronBtn, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+				Parent = header, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0),
 				Rotation = Section.Collapsed and -90 or 0,
 			})
 			local headerLine = create("Frame", {
@@ -1453,64 +1646,100 @@ function OrcaHub:CreateWindow(opts)
 			}, { padding(8, 12, 12, 12) })
 			local list = create("UIListLayout", { Parent = body, Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder })
 
+			local function isOpen() return not Section.Collapsed or Window._searching end
+
 			function Section:_height()
-				return SECTION_HEADER + (Section.Collapsed and 0 or Section._bodyH)
+				return SECTION_HEADER + (isOpen() and Section._bodyH or 0)
 			end
 
-			local function resize(animate)
+			local function refreshBadge()
+				local n = 0
+				for _, el in ipairs(Section.Elements) do
+					if el.Type ~= "Divider" and el.Type ~= "Label" then n = n + 1 end
+				end
+				countBadge.Text = tostring(n)
+				countBadge.Visible = Section.Collapsed and not Window._searching and n > 0
+			end
+
+			function Section:_resize(animate)
 				local target = UDim2.fromOffset(Section._width or frame.Size.X.Offset, Section:_height())
 				set(frame, { Size = target }, animate, 0.35)
+				refreshBadge()
 			end
 
 			list:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
 				Section._bodyH = list.AbsoluteContentSize.Y / Window.Scale + 20
-				resize(false)
-				Tab:_queueLayout(false)
+				Section:_resize(false)
+				C:_queueLayout(false)
 			end)
 
 			function Section:SetCollapsed(v, skipSave)
+				if Section.Collapsed == v then return end
 				Section.Collapsed = v
 				tween(chevron, { Rotation = v and -90 or 0 }, 0.3)
 				tween(headerLine, { BackgroundTransparency = v and 1 or 0 }, 0.2)
-				resize(true)
-				Tab:_layout(true)
+				Section:_resize(true)
+				if not v and Window.Accordion then
+					for _, other in ipairs(C.Sections) do
+						if other ~= Section and not other.Collapsed then other:SetCollapsed(true, true) end
+					end
+				end
+				C:_layout(true)
 				if not skipSave then Window:SaveLayout() end
 			end
+			function Section:ToggleCollapsed() Section:SetCollapsed(not Section.Collapsed) end
 
-			chevronBtn.MouseEnter:Connect(function() tween(chevronBtn, { BackgroundTransparency = 0 }) end)
-			chevronBtn.MouseLeave:Connect(function() tween(chevronBtn, { BackgroundTransparency = 1 }) end)
-			chevronBtn.MouseButton1Click:Connect(function() Section:SetCollapsed(not Section.Collapsed) end)
-
-			frame.MouseEnter:Connect(function() if not MOBILE then tween(grip, { ImageTransparency = 0 }) end end)
-			frame.MouseLeave:Connect(function() if not MOBILE then tween(grip, { ImageTransparency = 0.6 }) end end)
+			-- the whole header toggles the section; dragging it moves the section
+			header.MouseEnter:Connect(function()
+				if MOBILE then return end
+				tween(header, { BackgroundTransparency = 0.6 }, 0.15)
+				tween(grip, { ImageTransparency = 0 }, 0.15)
+				tween(chevron, { ImageColor3 = T().Text }, 0.15)
+			end)
+			header.MouseLeave:Connect(function()
+				if MOBILE then return end
+				tween(header, { BackgroundTransparency = 1 }, 0.2)
+				tween(grip, { ImageTransparency = 0.6 }, 0.2)
+				tween(chevron, { ImageColor3 = T().DimText }, 0.2)
+			end)
 
 			header.InputBegan:Connect(function(input)
-				if not isPress(input) or Window._searching or Tab._dragging then return end
+				if not isPress(input) or C._dragging then return end
 				local start = vec2(input.Position)
 				local touch = input.UserInputType == Enum.UserInputType.Touch
-				local done = false
-				local moveConn, endConn
-				local function cleanup()
-					done = true
-					if moveConn then moveConn:Disconnect() end
-					if endConn then endConn:Disconnect() end
-				end
+				local state = "pending"
+				local cancel
 				if touch then
-					task.delay(0.3, function()
-						if not done then
-							cleanup()
-							Tab:_startDrag(Section, input, start)
-						end
-					end)
-				end
-				moveConn = UserInputService.InputChanged:Connect(function(i)
-					if isMove(i, touch and input or nil) and (vec2(i.Position) - start).Magnitude > 6 then
-						cleanup()
-						if not touch then Tab:_startDrag(Section, input, start) end
+					tween(header, { BackgroundTransparency = 0.6 }, 0.1)
+					if not Window._searching then
+						task.delay(0.35, function()
+							if state == "pending" then
+								state = "drag"
+								cancel()
+								C:_startDrag(Section, input, start)
+							end
+						end)
 					end
-				end)
-				endConn = UserInputService.InputEnded:Connect(function(i)
-					if i == input or i.UserInputType == Enum.UserInputType.MouseButton1 then cleanup() end
+				end
+				cancel = Pointer.track(input, function(pos)
+					if state ~= "pending" then return end
+					if (pos - start).Magnitude > (touch and 10 or 5) then
+						if touch or Window._searching then
+							state = "cancelled"
+							cancel()
+							if touch then tween(header, { BackgroundTransparency = 1 }, 0.2) end
+						else
+							state = "drag"
+							cancel()
+							C:_startDrag(Section, input, start)
+						end
+					end
+				end, function()
+					if touch then tween(header, { BackgroundTransparency = 1 }, 0.2) end
+					if state == "pending" then
+						state = "tap"
+						if not Window._searching then Section:ToggleCollapsed() end
+					end
 				end)
 			end)
 
@@ -1524,7 +1753,7 @@ function OrcaHub:CreateWindow(opts)
 				end
 			end
 			Section._savedIndex = index or math.huge
-			local col = Tab.Columns[column]
+			local col = C.Columns[column]
 			local insertAt = #col + 1
 			for i, other in ipairs(col) do
 				if (other._savedIndex or math.huge) > Section._savedIndex then
@@ -1533,9 +1762,9 @@ function OrcaHub:CreateWindow(opts)
 				end
 			end
 			table.insert(col, insertAt, Section)
-			table.insert(Tab.Sections, Section)
-			resize(false)
-			Tab:_queueLayout(false)
+			table.insert(C.Sections, Section)
+			Section:_resize(false)
+			C:_queueLayout(false)
 
 			------------------------------------------------ element helpers
 
@@ -1547,7 +1776,18 @@ function OrcaHub:CreateWindow(opts)
 				})
 			end
 
-			local function titleBlock(parent, name, desc, rightInset, top)
+			local function rowHover(row, hit)
+				if MOBILE then return end
+				local glow = create("Frame", {
+					Parent = row, BackgroundTransparency = 1, ZIndex = 0,
+					Position = UDim2.fromOffset(-6, -1), Size = UDim2.new(1, 12, 1, 2),
+					Theme = { BackgroundColor3 = "ElementHover" },
+				}, { corner(6) })
+				hit.MouseEnter:Connect(function() tween(glow, { BackgroundTransparency = 0.55 }, 0.15) end)
+				hit.MouseLeave:Connect(function() tween(glow, { BackgroundTransparency = 1 }, 0.2) end)
+			end
+
+			local function titleBlock(parent, name, desc, rightInset, top, tooltip)
 				local holderFrame = create("Frame", {
 					Parent = parent, BackgroundTransparency = 1,
 					Position = UDim2.fromOffset(0, top or 0),
@@ -1557,17 +1797,40 @@ function OrcaHub:CreateWindow(opts)
 					Parent = holderFrame, VerticalAlignment = Enum.VerticalAlignment.Center,
 					SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 1),
 				})
-				local title = text({
-					Parent = holderFrame, Text = name, Size = UDim2.new(1, 0, 0, 16), LayoutOrder = 1,
-					TextTruncate = Enum.TextTruncate.AtEnd, Theme = false, TextColor3 = T().SubText,
+				local line = create("Frame", { Parent = holderFrame, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 16), LayoutOrder = 1 }, {
+					create("UIListLayout", {
+						FillDirection = Enum.FillDirection.Horizontal, VerticalAlignment = Enum.VerticalAlignment.Center,
+						SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 5),
+					}),
 				})
+				local title = text({
+					Parent = line, Text = name, Size = UDim2.fromOffset(0, 16), AutomaticSize = Enum.AutomaticSize.X, LayoutOrder = 1,
+					Theme = false, TextColor3 = T().SubText, TextTruncate = Enum.TextTruncate.AtEnd,
+				})
+				create("UISizeConstraint", { Parent = title, MaxSize = Vector2.new(MOBILE and 190 or 230, 16) })
+				if tooltip then
+					local tipBtn = create("TextButton", {
+						Parent = line, Text = "", AutoButtonColor = false, BackgroundTransparency = 1,
+						Size = UDim2.fromOffset(14, 14), LayoutOrder = 2,
+					})
+					local tipIcon = Icon("info", 13, "DimText", { Parent = tipBtn, Size = UDim2.fromScale(1, 1) })
+					tipBtn.MouseEnter:Connect(function()
+						tween(tipIcon, { ImageColor3 = T().Accent }, 0.15)
+						Window:_showTip(tipBtn, tooltip)
+					end)
+					tipBtn.MouseLeave:Connect(function()
+						tween(tipIcon, { ImageColor3 = T().DimText }, 0.2)
+						Window:_hideTip()
+					end)
+					tipBtn.MouseButton1Click:Connect(function() Window:_showTip(tipBtn, tooltip) end)
+				end
 				if desc and not top then
 					text({
 						Parent = holderFrame, Text = desc, TextSize = 11, Size = UDim2.new(1, 0, 0, 14), LayoutOrder = 2,
 						TextTruncate = Enum.TextTruncate.AtEnd, Theme = { TextColor3 = "DimText" },
 					})
 				end
-				return title
+				return title, holderFrame
 			end
 
 			local function register(kind, o, row, obj)
@@ -1575,7 +1838,8 @@ function OrcaHub:CreateWindow(opts)
 				obj.Name = o.Name or o.Title or kind
 				obj.Row = row
 				obj.Flag = o.Flag
-				obj.SearchText = string.lower(obj.Name .. " " .. (o.Description or ""))
+				obj.Section = Section
+				obj.SearchText = string.lower(obj.Name .. " " .. (o.Description or "") .. " " .. (o.Tooltip or ""))
 				function obj:SetVisible(v)
 					row.Visible = v
 				end
@@ -1585,9 +1849,11 @@ function OrcaHub:CreateWindow(opts)
 						if e == obj then table.remove(Section.Elements, i) break end
 					end
 					if o.Flag then OrcaHub.Options[o.Flag] = nil end
+					refreshBadge()
 				end
 				table.insert(Section.Elements, obj)
 				if o.Flag then OrcaHub.Options[o.Flag] = obj end
+				refreshBadge()
 				return obj
 			end
 
@@ -1598,6 +1864,209 @@ function OrcaHub:CreateWindow(opts)
 				btn.MouseLeave:Connect(function()
 					if not isActive() then tween(title, { TextColor3 = T().SubText }) end
 				end)
+			end
+
+			------------------------------------------------ popups
+
+			local function popupAt(anchor, width, height)
+				local function place()
+					local pos = Window:_toMain(anchor.AbsolutePosition)
+					local anchorH = anchor.AbsoluteSize.Y / Window.Scale
+					local mainH = main.AbsoluteSize.Y / Window.Scale
+					local mainW = main.AbsoluteSize.X / Window.Scale
+					local y = pos.Y + anchorH + 6
+					local up = false
+					if y + height > mainH - 8 then
+						y = math.max(8, pos.Y - height - 6)
+						up = true
+					end
+					local x = math.clamp(pos.X + (anchor.AbsoluteSize.X / Window.Scale) - width, 8, mainW - width - 8)
+					return x, y, up
+				end
+				local x, y, up = place()
+				local frame = create("Frame", {
+					Parent = overlay, ZIndex = 2, ClipsDescendants = true,
+					Position = UDim2.fromOffset(x, up and (y + height) or y), Size = UDim2.fromOffset(width, 0),
+					Theme = { BackgroundColor3 = "Section" },
+				}, { corner(8), stroke("StrokeLight") })
+				tween(frame, { Size = UDim2.fromOffset(width, height), Position = UDim2.fromOffset(x, y) }, 0.3)
+				local function close()
+					tween(frame, { Size = UDim2.fromOffset(width, 0), Position = UDim2.fromOffset(x, up and (y + height) or y) }, 0.2)
+					task.delay(0.21, function() frame:Destroy() end)
+				end
+				local function reposition()
+					local pageTop = page.AbsolutePosition.Y
+					local pageBottom = pageTop + page.AbsoluteSize.Y
+					local a = anchor.AbsolutePosition.Y
+					if a + anchor.AbsoluteSize.Y < pageTop or a > pageBottom then
+						Window:_closePopup()
+						return
+					end
+					x, y, up = place()
+					frame.Position = UDim2.fromOffset(x, y)
+				end
+				return frame, close, reposition
+			end
+
+			------------------------------------------------ shared controls (rows and toggle add-ons)
+
+			local function keybindControl(parent, o, onPress, onRelease)
+				local key = o.Default or Enum.KeyCode.Unknown
+				local pillBtn = text({
+					Class = "TextButton", Parent = parent, Text = "", AutoButtonColor = false, TextSize = 11, Weight = "Medium",
+					TextXAlignment = Enum.TextXAlignment.Center, BackgroundTransparency = 0,
+					Size = UDim2.fromOffset(0, 22), AutomaticSize = Enum.AutomaticSize.X,
+					Theme = { BackgroundColor3 = "Element", TextColor3 = "SubText" },
+				})
+				corner(6).Parent = pillBtn
+				padding(0, 8, 0, 8).Parent = pillBtn
+				local pillStroke = stroke("Stroke")
+				pillStroke.Parent = pillBtn
+				create("UISizeConstraint", { Parent = pillBtn, MinSize = Vector2.new(30, 22) })
+
+				local ctl = {}
+				local entry = { Key = key, Name = o.Name or "Keybind", Pressed = onPress, Released = onRelease }
+				table.insert(Window.Keybinds, entry)
+				ctl.Entry = entry
+				local function display()
+					pillBtn.Text = key == Enum.KeyCode.Unknown and "None" or key.Name
+				end
+				function ctl:Set(k)
+					key = k or Enum.KeyCode.Unknown
+					entry.Key = key
+					display()
+					if o.Flag then OrcaHub.Flags[o.Flag] = key end
+					safeCall(o.ChangedCallback, key)
+				end
+				function ctl:Get() return key end
+				pillBtn.MouseButton1Click:Connect(function()
+					pillBtn.Text = "..."
+					tween(pillStroke, { Color = T().Accent })
+					tween(pillBtn, { TextColor3 = T().Accent })
+					Window._capturing = function(k)
+						tween(pillStroke, { Color = T().Stroke })
+						tween(pillBtn, { TextColor3 = T().SubText })
+						if k == Enum.KeyCode.Escape or k == Enum.KeyCode.Backspace then k = Enum.KeyCode.Unknown end
+						ctl:Set(k)
+						task.defer(function() Window._capturing = nil end)
+					end
+				end)
+				display()
+				if o.Flag then OrcaHub.Flags[o.Flag] = key end
+				return ctl, pillBtn
+			end
+
+			local function colorControl(parent, o)
+				local color = o.Default or T().Accent
+				local h, s, v = color:ToHSV()
+				local swatch = create("TextButton", {
+					Parent = parent, Text = "", AutoButtonColor = false, BackgroundColor3 = color,
+					Size = UDim2.fromOffset(o.Small and 22 or 40, 22),
+				}, { corner(6), stroke("StrokeLight") })
+
+				local ctl = {}
+				local listeners = {}
+				local function changed(silent)
+					swatch.BackgroundColor3 = color
+					for _, fn in ipairs(listeners) do fn() end
+					if o.Flag then OrcaHub.Flags[o.Flag] = color end
+					if not silent then safeCall(o.Callback, color) end
+				end
+				function ctl:Set(c, silent)
+					color = c
+					h, s, v = c:ToHSV()
+					changed(silent)
+				end
+				function ctl:Get() return color end
+
+				swatch.MouseButton1Click:Connect(function()
+					local W, H = 230, 196
+					local frame, closeFrame, reposition = popupAt(swatch, W, H)
+					Window:_openPopup({
+						Close = function()
+							listeners = {}
+							closeFrame()
+						end,
+						Reposition = reposition,
+					})
+
+					local sv = create("TextButton", {
+						Parent = frame, Text = "", AutoButtonColor = false,
+						Position = UDim2.fromOffset(10, 10), Size = UDim2.fromOffset(W - 46, 130),
+						BackgroundColor3 = Color3.fromHSV(h, 1, 1),
+					}, { corner(6) })
+					create("Frame", {
+						Parent = sv, Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(1, 1, 1),
+					}, { corner(6), create("UIGradient", { Transparency = NumberSequence.new(0, 1) }) })
+					create("Frame", {
+						Parent = sv, Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0), ZIndex = 2,
+					}, { corner(6), create("UIGradient", { Rotation = 90, Transparency = NumberSequence.new(1, 0) }) })
+					local svCursor = create("Frame", {
+						Parent = sv, AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(12, 12), ZIndex = 3,
+						BackgroundTransparency = 1,
+					}, { corner(6), create("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 2 }) })
+
+					local keypoints = {}
+					for i = 0, 6 do
+						table.insert(keypoints, ColorSequenceKeypoint.new(i / 6, Color3.fromHSV(i == 6 and 0.999 or i / 6, 1, 1)))
+					end
+					local hue = create("TextButton", {
+						Parent = frame, Text = "", AutoButtonColor = false, BackgroundColor3 = Color3.new(1, 1, 1),
+						Position = UDim2.fromOffset(W - 28, 10), Size = UDim2.fromOffset(18, 130),
+					}, { corner(6), create("UIGradient", { Rotation = 90, Color = ColorSequence.new(keypoints) }) })
+					local hueCursor = create("Frame", {
+						Parent = hue, AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(1, 4, 0, 5),
+						BackgroundColor3 = Color3.new(1, 1, 1),
+					}, { corner(3), create("UIStroke", { Color = Color3.new(0, 0, 0), Transparency = 0.6 }) })
+					local preview = create("Frame", {
+						Parent = frame, Position = UDim2.fromOffset(10, 150), Size = UDim2.fromOffset(36, 34),
+						BackgroundColor3 = color,
+					}, { corner(6), stroke("StrokeLight") })
+					local hexBox = text({
+						Class = "TextBox", Parent = frame, Text = "", ClearTextOnFocus = false, TextSize = 12,
+						Position = UDim2.fromOffset(54, 150), Size = UDim2.new(1, -64, 0, 34), BackgroundTransparency = 0,
+						Theme = { BackgroundColor3 = "Element", TextColor3 = "Text" },
+					})
+					corner(6).Parent = hexBox
+					padding(0, 10, 0, 10).Parent = hexBox
+
+					local function paint()
+						sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+						svCursor.Position = UDim2.fromScale(s, 1 - v)
+						hueCursor.Position = UDim2.fromScale(0.5, h)
+						preview.BackgroundColor3 = color
+						if not hexBox:IsFocused() then hexBox.Text = "#" .. string.upper(color:ToHex()) end
+					end
+					table.insert(listeners, paint)
+					paint()
+
+					local function bindDrag(target, apply)
+						target.InputBegan:Connect(function(input)
+							if not isPress(input) then return end
+							apply(vec2(input.Position))
+							Pointer.track(input, function(pos) apply(pos) end)
+						end)
+					end
+					bindDrag(sv, function(p)
+						local rel = p - sv.AbsolutePosition
+						s = math.clamp(rel.X / sv.AbsoluteSize.X, 0, 1)
+						v = 1 - math.clamp(rel.Y / sv.AbsoluteSize.Y, 0, 1)
+						color = Color3.fromHSV(h, s, v)
+						changed()
+					end)
+					bindDrag(hue, function(p)
+						h = math.clamp((p.Y - hue.AbsolutePosition.Y) / hue.AbsoluteSize.Y, 0, 0.999)
+						color = Color3.fromHSV(h, s, v)
+						changed()
+					end)
+					hexBox.FocusLost:Connect(function()
+						local ok, c = pcall(Color3.fromHex, (string.gsub(hexBox.Text, "#", "")))
+						if ok and c then ctl:Set(c) else paint() end
+					end)
+				end)
+
+				if o.Flag then OrcaHub.Flags[o.Flag] = color end
+				return ctl, swatch
 			end
 
 			------------------------------------------------ label / paragraph / divider
@@ -1659,7 +2128,7 @@ function OrcaHub:CreateWindow(opts)
 				}, { corner(8) })
 				if primary then accentGradient(0).Parent = b else stroke("Stroke").Parent = b end
 				local scale = create("UIScale", { Parent = b })
-				local content = create("Frame", {
+				local inner = create("Frame", {
 					Parent = b, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1),
 				}, {
 					create("UIListLayout", {
@@ -1669,14 +2138,18 @@ function OrcaHub:CreateWindow(opts)
 					}),
 				})
 				if o.Icon and iconImage(o.Icon) then
-					local ic = Icon(o.Icon, 15, (not primary) and "SubText" or nil, { Parent = content, LayoutOrder = 1 })
+					local ic = Icon(o.Icon, 15, (not primary) and "SubText" or nil, { Parent = inner, LayoutOrder = 1 })
 					if primary then ic.ImageColor3 = Color3.new(1, 1, 1) end
 				end
 				text({
-					Parent = content, Text = o.Name or "Button", Weight = "Medium", LayoutOrder = 2,
+					Parent = inner, Text = o.Name or "Button", Weight = "Medium", LayoutOrder = 2,
 					Size = UDim2.fromOffset(0, 16), AutomaticSize = Enum.AutomaticSize.X,
 					Theme = (not primary) and { TextColor3 = "Text" } or false, TextColor3 = Color3.new(1, 1, 1),
 				})
+				if o.Tooltip then
+					b.MouseEnter:Connect(function() Window:_showTip(b, o.Tooltip) end)
+					b.MouseLeave:Connect(function() Window:_hideTip() end)
+				end
 
 				b.MouseEnter:Connect(function()
 					if primary then tween(b, { BackgroundTransparency = 0.12 }) else tween(b, { BackgroundColor3 = T().ElementHover }) end
@@ -1706,13 +2179,14 @@ function OrcaHub:CreateWindow(opts)
 				return register("Button", o, row, obj)
 			end
 
-			------------------------------------------------ toggle
+			------------------------------------------------ toggle (+ keybind / colour add-ons)
 
 			function Section:Toggle(o)
 				local state = o.Default == true
 				local row = newRow(o.Description and ROW_H + 12 or ROW_H)
 				local hit = create("TextButton", { Parent = row, Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) })
-				local title = titleBlock(row, o.Name or "Toggle", o.Description, 56)
+				rowHover(row, hit)
+				local title, titleHolder = titleBlock(row, o.Name or "Toggle", o.Description, 56, nil, o.Tooltip)
 				local switch = create("Frame", {
 					Parent = row, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(40, 22),
 					Theme = { BackgroundColor3 = "ToggleOff" },
@@ -1724,6 +2198,19 @@ function OrcaHub:CreateWindow(opts)
 					Parent = switch, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 3, 0.5, 0), Size = UDim2.fromOffset(16, 16),
 					ZIndex = 2, Theme = { BackgroundColor3 = "Knob" },
 				}, { corner(8) })
+				local addons = create("Frame", {
+					Parent = row, BackgroundTransparency = 1, AnchorPoint = Vector2.new(1, 0.5),
+					Position = UDim2.new(1, -48, 0.5, 0), Size = UDim2.fromOffset(0, 22), AutomaticSize = Enum.AutomaticSize.X,
+				}, {
+					create("UIListLayout", {
+						FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Right,
+						VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder,
+					}),
+				})
+				local function fitTitle()
+					titleHolder.Size = UDim2.new(1, -(56 + addons.AbsoluteSize.X / Window.Scale + 6), 1, 0)
+				end
+				addons:GetPropertyChangedSignal("AbsoluteSize"):Connect(fitTitle)
 
 				local obj = {}
 				local function render(animate)
@@ -1740,6 +2227,29 @@ function OrcaHub:CreateWindow(opts)
 					if not silent then safeCall(o.Callback, state) end
 				end
 				function obj:Get() return state end
+
+				function obj:AddKeybind(ko)
+					ko = ko or {}
+					ko.Name = ko.Name or o.Name
+					local mode = ko.Mode or "Toggle"
+					local ctl = keybindControl(addons, ko, function()
+						if mode == "Hold" then obj:Set(true) else obj:Set(not state) end
+						safeCall(ko.Callback, state)
+					end, mode == "Hold" and function() obj:Set(false) end or nil)
+					ctl.Entry.IsActive = function() return state end
+					if ko.Flag then OrcaHub.Options[ko.Flag] = ctl end
+					fitTitle()
+					return ctl
+				end
+				function obj:AddColorpicker(co)
+					co = co or {}
+					co.Small = true
+					local ctl = colorControl(addons, co)
+					if co.Flag then OrcaHub.Options[co.Flag] = ctl end
+					fitTitle()
+					return ctl
+				end
+				obj.AddColorPicker = obj.AddColorpicker
 
 				hoverTitle(hit, title, function() return state end)
 				hit.MouseButton1Click:Connect(function() obj:Set(not state) end)
@@ -1761,7 +2271,7 @@ function OrcaHub:CreateWindow(opts)
 				if dot then decimals = #incText - dot end
 
 				local row = newRow(ROW_H + 18)
-				titleBlock(row, o.Name or "Slider", nil, 70, 2)
+				local title = titleBlock(row, o.Name or "Slider", nil, 70, 2, o.Tooltip)
 				local valueBox = text({
 					Class = "TextBox", Parent = row, Text = "", TextSize = 12, ClearTextOnFocus = false,
 					TextXAlignment = Enum.TextXAlignment.Center, BackgroundTransparency = 0,
@@ -1784,57 +2294,48 @@ function OrcaHub:CreateWindow(opts)
 					Parent = fill, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(1, 0.5), Size = UDim2.fromOffset(14, 14),
 					ZIndex = 2, Theme = { BackgroundColor3 = "Knob" },
 				}, { corner(7) })
-				local knobStroke = create("UIStroke", { Parent = knob, Thickness = 2, Theme = { Color = "Accent" } })
-				knobStroke.Transparency = 0
+				create("UIStroke", { Parent = knob, Thickness = 2, Theme = { Color = "Accent" } })
 				local hit = create("TextButton", {
 					Parent = row, Text = "", AutoButtonColor = false, BackgroundTransparency = 1,
-					AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0), Size = UDim2.new(1, 0, 0, 22),
+					AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0), Size = UDim2.new(1, 0, 0, MOBILE and 26 or 22),
 				})
+				rowHover(row, hit)
+				hoverTitle(hit, title, function() return false end)
 
-				local function format(v)
-					return string.format("%." .. decimals .. "f", v)
+				local function format(n)
+					return string.format("%." .. decimals .. "f", n)
 				end
 
 				local obj = {}
-				function obj:Set(v, silent)
-					v = tonumber(v) or value
-					v = math.floor((v - min) / inc + 0.5) * inc + min
-					v = tonumber(format(math.clamp(v, min, max)))
-					local changed = v ~= value
-					value = v
-					local pct = max == min and 0 or (v - min) / (max - min)
+				function obj:Set(n, silent)
+					n = tonumber(n) or value
+					n = math.floor((n - min) / inc + 0.5) * inc + min
+					n = tonumber(format(math.clamp(n, min, max)))
+					local changed = n ~= value
+					value = n
+					local pct = max == min and 0 or (n - min) / (max - min)
 					tween(fill, { Size = UDim2.fromScale(pct, 1) }, 0.12)
-					valueBox.Text = format(v) .. suffix
-					if o.Flag then OrcaHub.Flags[o.Flag] = v end
-					if changed and not silent then safeCall(o.Callback, v) end
+					valueBox.Text = format(n) .. suffix
+					if o.Flag then OrcaHub.Flags[o.Flag] = n end
+					if changed and not silent then safeCall(o.Callback, n) end
 				end
 				function obj:Get() return value end
 
-				local dragging
 				local function update(x)
 					local pct = math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
 					obj:Set(min + (max - min) * pct, o.OnRelease)
 				end
 				hit.InputBegan:Connect(function(input)
 					if not isPress(input) then return end
-					dragging = input
 					page.ScrollingEnabled = false
 					tween(knob, { Size = UDim2.fromOffset(18, 18) }, 0.2, Enum.EasingStyle.Back)
 					update(input.Position.X)
-				end)
-				track(UserInputService.InputChanged:Connect(function(i)
-					if dragging and isMove(i, dragging.UserInputType == Enum.UserInputType.Touch and dragging or nil) then
-						update(i.Position.X)
-					end
-				end))
-				track(UserInputService.InputEnded:Connect(function(i)
-					if dragging and (i == dragging or i.UserInputType == Enum.UserInputType.MouseButton1) then
-						dragging = nil
+					Pointer.track(input, function(pos) update(pos.X) end, function()
 						page.ScrollingEnabled = true
 						tween(knob, { Size = UDim2.fromOffset(14, 14) }, 0.2)
 						if o.OnRelease then safeCall(o.Callback, value) end
-					end
-				end))
+					end)
+				end)
 				valueBox.FocusLost:Connect(function()
 					local n = tonumber((string.gsub(valueBox.Text, "[^%d%.%-]", "")))
 					obj:Set(n or value)
@@ -1848,7 +2349,7 @@ function OrcaHub:CreateWindow(opts)
 
 			function Section:Input(o)
 				local row = newRow(BOX_H + 22)
-				titleBlock(row, o.Name or "Input", nil, 0, 0)
+				titleBlock(row, o.Name or "Input", nil, 0, 0, o.Tooltip)
 				local box = create("Frame", {
 					Parent = row, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, BOX_H),
 					Theme = { BackgroundColor3 = "Element" },
@@ -1890,33 +2391,6 @@ function OrcaHub:CreateWindow(opts)
 				return register("Input", o, row, obj)
 			end
 
-			------------------------------------------------ popups
-
-			local function popupAt(anchor, width, height)
-				local pos = Window:_toMain(anchor.AbsolutePosition)
-				local anchorH = anchor.AbsoluteSize.Y / Window.Scale
-				local mainH = main.AbsoluteSize.Y / Window.Scale
-				local mainW = main.AbsoluteSize.X / Window.Scale
-				local y = pos.Y + anchorH + 6
-				local up = false
-				if y + height > mainH - 8 then
-					y = math.max(8, pos.Y - height - 6)
-					up = true
-				end
-				local x = math.clamp(pos.X + (anchor.AbsoluteSize.X / Window.Scale) - width, 8, mainW - width - 8)
-				local frame = create("Frame", {
-					Parent = overlay, ZIndex = 2, ClipsDescendants = true,
-					Position = UDim2.fromOffset(x, up and (y + height) or y), Size = UDim2.fromOffset(width, 0),
-					Theme = { BackgroundColor3 = "Section" },
-				}, { corner(8), stroke("StrokeLight") })
-				tween(frame, { Size = UDim2.fromOffset(width, height), Position = UDim2.fromOffset(x, y) }, 0.3)
-				local function close()
-					tween(frame, { Size = UDim2.fromOffset(width, 0), Position = UDim2.fromOffset(x, up and (y + height) or y) }, 0.2)
-					task.delay(0.21, function() frame:Destroy() end)
-				end
-				return frame, close
-			end
-
 			------------------------------------------------ dropdown
 
 			function Section:Dropdown(o)
@@ -1931,7 +2405,7 @@ function OrcaHub:CreateWindow(opts)
 				end
 
 				local row = newRow(BOX_H + 22)
-				titleBlock(row, o.Name or "Dropdown", nil, 0, 0)
+				titleBlock(row, o.Name or "Dropdown", nil, 0, 0, o.Tooltip)
 				local head = create("TextButton", {
 					Parent = row, Text = "", AutoButtonColor = false,
 					AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, BOX_H),
@@ -1977,7 +2451,7 @@ function OrcaHub:CreateWindow(opts)
 					local searchH = searchable and (BOX_H + 6) or 0
 					local listH = math.min(math.max(#options, 1), 6) * (ITEM_H + 2) + 8
 					local width = head.AbsoluteSize.X / Window.Scale
-					local frame, closeFrame = popupAt(head, width, listH + searchH)
+					local frame, closeFrame, reposition = popupAt(head, width, listH + searchH)
 					tween(chevron, { Rotation = 180 }, 0.25)
 					tween(headStroke, { Color = T().Accent }, 0.2)
 					Window:_openPopup({
@@ -1987,6 +2461,7 @@ function OrcaHub:CreateWindow(opts)
 							tween(headStroke, { Color = T().Stroke }, 0.2)
 							closeFrame()
 						end,
+						Reposition = reposition,
 					})
 
 					local filterBox
@@ -2097,204 +2572,278 @@ function OrcaHub:CreateWindow(opts)
 				return register("Dropdown", o, row, obj)
 			end
 
-			------------------------------------------------ keybind
+			------------------------------------------------ keybind / colour picker rows
 
 			function Section:Keybind(o)
-				local key = o.Default or Enum.KeyCode.Unknown
 				local row = newRow(ROW_H)
-				local title = titleBlock(row, o.Name or "Keybind", nil, 90)
-				local pillBtn = text({
-					Class = "TextButton", Parent = row, Text = "", AutoButtonColor = false, TextSize = 12, Weight = "Medium",
-					TextXAlignment = Enum.TextXAlignment.Center, BackgroundTransparency = 0,
-					AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(0, 24),
-					AutomaticSize = Enum.AutomaticSize.X, Theme = { BackgroundColor3 = "Element", TextColor3 = "Text" },
-				})
-				corner(6).Parent = pillBtn
-				padding(0, 10, 0, 10).Parent = pillBtn
-				local pillStroke = stroke("Stroke")
-				pillStroke.Parent = pillBtn
-				create("UISizeConstraint", { Parent = pillBtn, MinSize = Vector2.new(40, 24) })
-
-				local listening = false
-				local obj = {}
-				local function display()
-					pillBtn.Text = key == Enum.KeyCode.Unknown and "None" or key.Name
-				end
-				function obj:Set(k)
-					key = k or Enum.KeyCode.Unknown
-					display()
-					if o.Flag then OrcaHub.Flags[o.Flag] = key end
-					safeCall(o.ChangedCallback, key)
-				end
-				function obj:Get() return key end
-
-				pillBtn.MouseButton1Click:Connect(function()
-					listening = true
-					Window._capturing = true
-					pillBtn.Text = "..."
-					tween(pillStroke, { Color = T().Accent })
-					tween(pillBtn, { TextColor3 = T().Accent })
-				end)
-				hoverTitle(pillBtn, title, function() return false end)
-				track(UserInputService.InputBegan:Connect(function(input, processed)
-					if listening then
-						if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
-						listening = false
-						tween(pillStroke, { Color = T().Stroke })
-						tween(pillBtn, { TextColor3 = T().Text })
-						local k = input.KeyCode
-						if k == Enum.KeyCode.Escape or k == Enum.KeyCode.Backspace then k = Enum.KeyCode.Unknown end
-						obj:Set(k)
-						task.defer(function() Window._capturing = false end)
-					elseif not processed and key ~= Enum.KeyCode.Unknown and input.KeyCode == key then
-						safeCall(o.Callback, key)
-					end
-				end))
-				display()
-				if o.Flag then OrcaHub.Flags[o.Flag] = key end
-				return register("Keybind", o, row, obj)
+				local hit = create("TextButton", { Parent = row, Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) })
+				rowHover(row, hit)
+				local title = titleBlock(row, o.Name or "Keybind", nil, 90, nil, o.Tooltip)
+				local ctl
+				local pillBtn
+				ctl, pillBtn = keybindControl(row, o, function() safeCall(o.Callback, ctl:Get()) end)
+				pillBtn.AnchorPoint = Vector2.new(1, 0.5)
+				pillBtn.Position = UDim2.new(1, 0, 0.5, 0)
+				hoverTitle(hit, title, function() return false end)
+				return register("Keybind", o, row, ctl)
 			end
 
-			------------------------------------------------ colour picker
-
 			function Section:Colorpicker(o)
-				local color = o.Default or T().Accent
-				local h, s, v = color:ToHSV()
 				local row = newRow(ROW_H)
-				local title = titleBlock(row, o.Name or "Color", nil, 60)
-				local swatch = create("TextButton", {
-					Parent = row, Text = "", AutoButtonColor = false, BackgroundColor3 = color,
-					AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(40, 22),
-				}, { corner(6), stroke("StrokeLight") })
-				hoverTitle(swatch, title, function() return false end)
-
-				local obj = {}
-				local listeners = {}
-				function obj:Set(c, silent)
-					color = c
-					h, s, v = c:ToHSV()
-					swatch.BackgroundColor3 = c
-					for _, fn in ipairs(listeners) do fn() end
-					if o.Flag then OrcaHub.Flags[o.Flag] = c end
-					if not silent then safeCall(o.Callback, c) end
-				end
-				function obj:Get() return color end
-
-				local function fromHSV(silent)
-					local c = Color3.fromHSV(h, s, v)
-					color = c
-					swatch.BackgroundColor3 = c
-					for _, fn in ipairs(listeners) do fn() end
-					if o.Flag then OrcaHub.Flags[o.Flag] = c end
-					if not silent then safeCall(o.Callback, c) end
-				end
-
-				swatch.MouseButton1Click:Connect(function()
-					local W, H = 230, 196
-					local frame, closeFrame = popupAt(swatch, W, H)
-					Window:_openPopup({
-						Close = function()
-							listeners = {}
-							closeFrame()
-						end,
-					})
-
-					local sv = create("TextButton", {
-						Parent = frame, Text = "", AutoButtonColor = false,
-						Position = UDim2.fromOffset(10, 10), Size = UDim2.fromOffset(W - 46, 130),
-						BackgroundColor3 = Color3.fromHSV(h, 1, 1),
-					}, { corner(6) })
-					create("Frame", {
-						Parent = sv, Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(1, 1, 1),
-					}, {
-						corner(6),
-						create("UIGradient", { Transparency = NumberSequence.new(0, 1) }),
-					})
-					create("Frame", {
-						Parent = sv, Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0), ZIndex = 2,
-					}, {
-						corner(6),
-						create("UIGradient", { Rotation = 90, Transparency = NumberSequence.new(1, 0) }),
-					})
-					local svCursor = create("Frame", {
-						Parent = sv, AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(12, 12), ZIndex = 3,
-						BackgroundTransparency = 1,
-					}, { corner(6), create("UIStroke", { Color = Color3.new(1, 1, 1), Thickness = 2 }) })
-
-					local keypoints = {}
-					for i = 0, 6 do
-						table.insert(keypoints, ColorSequenceKeypoint.new(i / 6, Color3.fromHSV(i / 6 == 1 and 0.999 or i / 6, 1, 1)))
-					end
-					local hue = create("TextButton", {
-						Parent = frame, Text = "", AutoButtonColor = false, BackgroundColor3 = Color3.new(1, 1, 1),
-						Position = UDim2.fromOffset(W - 28, 10), Size = UDim2.fromOffset(18, 130),
-					}, { corner(6), create("UIGradient", { Rotation = 90, Color = ColorSequence.new(keypoints) }) })
-					local hueCursor = create("Frame", {
-						Parent = hue, AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.new(1, 4, 0, 5),
-						BackgroundColor3 = Color3.new(1, 1, 1),
-					}, { corner(3), create("UIStroke", { Color = Color3.new(0, 0, 0), Transparency = 0.6 }) })
-
-					local preview = create("Frame", {
-						Parent = frame, Position = UDim2.fromOffset(10, 150), Size = UDim2.fromOffset(36, 34),
-						BackgroundColor3 = color,
-					}, { corner(6), stroke("StrokeLight") })
-					local hexBox = text({
-						Class = "TextBox", Parent = frame, Text = "", ClearTextOnFocus = false, TextSize = 12,
-						Position = UDim2.fromOffset(54, 150), Size = UDim2.new(1, -64, 0, 34), BackgroundTransparency = 0,
-						Theme = { BackgroundColor3 = "Element", TextColor3 = "Text" },
-					})
-					corner(6).Parent = hexBox
-					padding(0, 10, 0, 10).Parent = hexBox
-
-					local function paint()
-						sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
-						svCursor.Position = UDim2.fromScale(s, 1 - v)
-						hueCursor.Position = UDim2.fromScale(0.5, h)
-						preview.BackgroundColor3 = color
-						if not hexBox:IsFocused() then hexBox.Text = "#" .. string.upper(color:ToHex()) end
-					end
-					table.insert(listeners, paint)
-					paint()
-
-					local function bindDrag(target, apply)
-						target.InputBegan:Connect(function(input)
-							if not isPress(input) then return end
-							apply(vec2(input.Position))
-							local touch = input.UserInputType == Enum.UserInputType.Touch
-							local moveConn, endConn
-							moveConn = track(UserInputService.InputChanged:Connect(function(i)
-								if isMove(i, touch and input or nil) then apply(vec2(i.Position)) end
-							end))
-							endConn = track(UserInputService.InputEnded:Connect(function(i)
-								if i == input or i.UserInputType == Enum.UserInputType.MouseButton1 then
-									moveConn:Disconnect()
-									endConn:Disconnect()
-								end
-							end))
-						end)
-					end
-					bindDrag(sv, function(p)
-						local rel = p - sv.AbsolutePosition
-						s = math.clamp(rel.X / sv.AbsoluteSize.X, 0, 1)
-						v = 1 - math.clamp(rel.Y / sv.AbsoluteSize.Y, 0, 1)
-						fromHSV()
-					end)
-					bindDrag(hue, function(p)
-						h = math.clamp((p.Y - hue.AbsolutePosition.Y) / hue.AbsoluteSize.Y, 0, 0.999)
-						fromHSV()
-					end)
-					hexBox.FocusLost:Connect(function()
-						local ok, c = pcall(Color3.fromHex, (string.gsub(hexBox.Text, "#", "")))
-						if ok and c then obj:Set(c) else paint() end
-					end)
-				end)
-
-				if o.Flag then OrcaHub.Flags[o.Flag] = color end
-				return register("Colorpicker", o, row, obj)
+				local hit = create("TextButton", { Parent = row, Text = "", AutoButtonColor = false, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) })
+				rowHover(row, hit)
+				local title = titleBlock(row, o.Name or "Color", nil, 60, nil, o.Tooltip)
+				local ctl, swatch = colorControl(row, o)
+				swatch.AnchorPoint = Vector2.new(1, 0.5)
+				swatch.Position = UDim2.new(1, 0, 0.5, 0)
+				hoverTitle(hit, title, function() return false end)
+				return register("Colorpicker", o, row, ctl)
 			end
 			Section.ColorPicker = Section.Colorpicker
 
 			return Section
+		end
+
+		return C
+	end
+
+	---------------------------------------------------------------- tabs
+
+	function Window:Tab(o)
+		o = o or {}
+		local Tab = {
+			Name = o.Name or "Tab",
+			Description = o.Description or "",
+			Containers = {},
+			SubTabs = {},
+			Window = Window,
+		}
+
+		local btn = create("TextButton", {
+			Parent = tabList, Text = "", AutoButtonColor = false, BackgroundTransparency = 1,
+			Size = UDim2.new(1, 0, 0, TAB_H), LayoutOrder = nextOrder(),
+		})
+		Tab.Button = btn
+		local iconInst
+		if iconImage(o.Icon) then
+			iconInst = Icon(o.Icon, 18, nil, {
+				Parent = btn, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 13, 0.5, 0),
+				ImageColor3 = T().DimText,
+			})
+		else
+			iconInst = text({
+				Parent = btn, Text = string.upper(string.sub(Tab.Name, 1, 1)), Weight = "Bold", TextSize = 15,
+				AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 13, 0.5, 0), Size = UDim2.fromOffset(18, 18),
+				TextXAlignment = Enum.TextXAlignment.Center, Theme = false, TextColor3 = T().DimText,
+			})
+		end
+		local iconProp = iconInst:IsA("ImageLabel") and "ImageColor3" or "TextColor3"
+		local iconFade = iconInst:IsA("ImageLabel") and "ImageTransparency" or "TextTransparency"
+		local label = text({
+			Parent = btn, Text = Tab.Name, TextSize = 13, Weight = "Medium",
+			Position = UDim2.fromOffset(42, 0), Size = UDim2.new(1, -74, 1, 0),
+			Theme = false, TextColor3 = T().SubText, TextTransparency = Window.Compact and 1 or 0,
+			TextTruncate = Enum.TextTruncate.AtEnd,
+		})
+		table.insert(fadeLabels, label)
+		local badge = text({
+			Parent = btn, Text = "", TextSize = 10, Weight = "Bold", TextXAlignment = Enum.TextXAlignment.Center,
+			AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.fromOffset(0, 16),
+			AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 0, Visible = false, ZIndex = 2,
+			BackgroundColor3 = Color3.new(1, 1, 1), TextColor3 = Color3.new(1, 1, 1), Theme = false,
+		})
+		corner(8).Parent = badge
+		padding(0, 5, 0, 5).Parent = badge
+		accentGradient(0).Parent = badge
+
+		local tabPage = create("Frame", {
+			Parent = pages, BackgroundTransparency = 1, Visible = false, Size = UDim2.fromScale(1, 1),
+		})
+		Tab.Page = tabPage
+
+		local function renderTab(active, animate)
+			set(label, { TextColor3 = active and T().Text or T().SubText }, animate)
+			set(iconInst, { [iconProp] = active and T().Accent or T().DimText }, animate)
+		end
+		table.insert(Refreshers, function() renderTab(Window.CurrentTab == Tab, false) end)
+
+		function Tab:_setBadge(n)
+			badge.Visible = n ~= nil and n > 0 and not Window.Compact
+			badge.Text = tostring(n or "")
+			local dim = n ~= nil and n == 0
+			set(label, { TextTransparency = Window.Compact and 1 or (dim and 0.6 or 0) }, true, 0.15)
+			set(iconInst, { [iconFade] = dim and 0.6 or 0 }, true, 0.15)
+		end
+
+		btn.MouseEnter:Connect(function()
+			if Window.CurrentTab ~= Tab then tween(label, { TextColor3 = T().Text }) end
+			if Window.Compact and not MOBILE then
+				local pos = Window:_toMain(btn.AbsolutePosition)
+				sideTip.Text = Tab.Name
+				sideTip.Position = UDim2.fromOffset(SIDEBAR_COMPACT + 6, pos.Y + (TAB_H - 26) / 2)
+				sideTip.Visible = true
+			end
+		end)
+		btn.MouseLeave:Connect(function()
+			if Window.CurrentTab ~= Tab then tween(label, { TextColor3 = T().SubText }) end
+			sideTip.Visible = false
+		end)
+
+		local function makePage(parent, top)
+			return create("ScrollingFrame", {
+				Parent = parent, BackgroundTransparency = 1, BorderSizePixel = 0,
+				Position = UDim2.fromOffset(0, top or 0), Size = UDim2.new(1, 0, 1, -(top or 0)), CanvasSize = UDim2.new(),
+				ScrollBarThickness = 3, ScrollingDirection = Enum.ScrollingDirection.Y,
+				Theme = { ScrollBarImageColor3 = "StrokeLight" },
+			})
+		end
+
+		-- the tab's own page (used when the tab has no sub-tabs)
+		local mainPage = makePage(tabPage)
+		local mainContainer = Container(mainPage, Tab.Name)
+		table.insert(Tab.Containers, mainContainer)
+		Tab.ActiveContainer = mainContainer
+
+		function Tab:_relayout(animate)
+			for _, c in ipairs(Tab.Containers) do c:_layout(animate) end
+		end
+
+		function Tab:Select()
+			if Window.CurrentTab == Tab then return end
+			Window:_closePopup()
+			Window:_hideTip()
+			local prev = Window.CurrentTab
+			Window.CurrentTab = Tab
+			if prev then
+				prev:_render(false)
+				prev.Page.Visible = false
+			end
+			renderTab(true, true)
+			pageTitle.Text = Tab.Name
+			pageDesc.Text = Tab.Description
+			pageTitle.Position = UDim2.fromOffset(52, (Tab.Description == "" or MOBILE) and (TOPBAR_H / 2 - 10) or 11)
+			pageTitle.TextTransparency = 1
+			pageDesc.TextTransparency = 1
+			tween(pageTitle, { TextTransparency = 0 }, 0.3)
+			tween(pageDesc, { TextTransparency = 0 }, 0.4)
+
+			tabPage.Visible = true
+			tabPage.Position = UDim2.fromOffset(0, 16)
+			tween(tabPage, { Position = UDim2.fromOffset(0, 0) }, 0.4)
+			pageCover.Visible = true
+			pageCover.BackgroundTransparency = 0
+			tween(pageCover, { BackgroundTransparency = 1 }, 0.3).Completed:Connect(function()
+				if pageCover.BackgroundTransparency >= 1 then pageCover.Visible = false end
+			end)
+
+			Tab:_relayout(false)
+			task.defer(function() Window:_moveIndicator(prev ~= nil) end)
+		end
+
+		function Tab:_render(active) renderTab(active, true) end
+
+		btn.MouseButton1Click:Connect(function() Tab:Select() end)
+
+		function Tab:Section(so)
+			return mainContainer:Section(so)
+		end
+
+		---------------------------------------------------- sub-tabs
+
+		local subBar, subPill, subList
+		local function ensureSubBar()
+			if subBar then return end
+			mainPage.Visible = false
+			subBar = create("Frame", {
+				Parent = tabPage, Position = UDim2.fromOffset(PAD, 10), Size = UDim2.new(1, -PAD * 2, 0, SUBTAB_H),
+				Theme = { BackgroundColor3 = "Sidebar" },
+			}, { corner(9), stroke("Stroke") })
+			subPill = create("Frame", {
+				Parent = subBar, Position = UDim2.fromOffset(3, 3), Size = UDim2.new(0, 0, 1, -6),
+				Theme = { BackgroundColor3 = "Element" },
+			}, { corner(7), stroke("StrokeLight") })
+			create("Frame", {
+				Parent = subPill, BackgroundColor3 = Color3.new(1, 1, 1), AnchorPoint = Vector2.new(0.5, 1),
+				Position = UDim2.new(0.5, 0, 1, -2), Size = UDim2.new(0.5, 0, 0, 2),
+			}, { corner(1), accentGradient(0) })
+			subList = create("Frame", {
+				Parent = subBar, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1), ZIndex = 2,
+			}, {
+				create("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, SortOrder = Enum.SortOrder.LayoutOrder }),
+				padding(3, 3, 3, 3),
+			})
+		end
+
+		local function movePill(animate)
+			local active
+			for i, st in ipairs(Tab.SubTabs) do
+				if st.Container == Tab.ActiveContainer then active = i end
+			end
+			if not active then return end
+			local w = (subBar.AbsoluteSize.X / Window.Scale - 6) / #Tab.SubTabs
+			set(subPill, { Position = UDim2.fromOffset(3 + (active - 1) * w, 3), Size = UDim2.new(0, w, 1, -6) }, animate, 0.35)
+		end
+
+		function Tab:SubTab(so)
+			so = so or {}
+			ensureSubBar()
+			local Sub = { Name = so.Name or "Sub" }
+			local b = text({
+				Class = "TextButton", Parent = subList, Text = Sub.Name, AutoButtonColor = false, Weight = "Medium",
+				TextSize = 12, TextXAlignment = Enum.TextXAlignment.Center, LayoutOrder = #Tab.SubTabs + 1,
+				Theme = false, TextColor3 = T().SubText,
+			})
+			Sub.Button = b
+			local subBadge = text({
+				Parent = b, Text = "", TextSize = 10, Weight = "Bold", TextXAlignment = Enum.TextXAlignment.Center,
+				AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(0, 14),
+				AutomaticSize = Enum.AutomaticSize.X, BackgroundTransparency = 0, Visible = false,
+				BackgroundColor3 = Color3.new(1, 1, 1), TextColor3 = Color3.new(1, 1, 1), Theme = false,
+			})
+			corner(7).Parent = subBadge
+			padding(0, 4, 0, 4).Parent = subBadge
+			accentGradient(0).Parent = subBadge
+
+			local subPage = makePage(tabPage, SUBTAB_H + 14)
+			subPage.Visible = false
+			local container = Container(subPage, Tab.Name .. "/" .. Sub.Name, function(n)
+				subBadge.Visible = n ~= nil and n > 0
+				subBadge.Text = tostring(n or "")
+				set(b, { TextTransparency = (n ~= nil and n == 0) and 0.6 or 0 }, true, 0.15)
+			end)
+			Sub.Container = container
+			Sub.Page = subPage
+			table.insert(Tab.Containers, container)
+			table.insert(Tab.SubTabs, Sub)
+			for _, st in ipairs(Tab.SubTabs) do
+				st.Button.Size = UDim2.new(1 / #Tab.SubTabs, 0, 1, 0)
+			end
+
+			function Sub:Select()
+				for _, other in ipairs(Tab.SubTabs) do
+					other.Page.Visible = other == Sub
+					tween(other.Button, { TextColor3 = other == Sub and T().Text or T().SubText }, 0.2)
+				end
+				Tab.ActiveContainer = container
+				Window:_closePopup()
+				subPage.Position = UDim2.fromOffset(0, SUBTAB_H + 24)
+				tween(subPage, { Position = UDim2.fromOffset(0, SUBTAB_H + 14) }, 0.35)
+				container:_layout(false)
+				task.defer(function() movePill(true) end)
+			end
+			b.MouseButton1Click:Connect(function() Sub:Select() end)
+			b.MouseEnter:Connect(function() if Tab.ActiveContainer ~= container then tween(b, { TextColor3 = T().Text }) end end)
+			b.MouseLeave:Connect(function() if Tab.ActiveContainer ~= container then tween(b, { TextColor3 = T().SubText }) end end)
+			table.insert(Refreshers, function() b.TextColor3 = Tab.ActiveContainer == container and T().Text or T().SubText end)
+
+			function Sub:Section(o2) return container:Section(o2) end
+			if #Tab.SubTabs == 1 then
+				subBar:GetPropertyChangedSignal("AbsoluteSize"):Connect(function() movePill(false) end)
+				Sub:Select()
+			else
+				task.defer(function() movePill(false) end)
+			end
+			return Sub
 		end
 
 		table.insert(Window.Tabs, Tab)
@@ -2302,12 +2851,226 @@ function OrcaHub:CreateWindow(opts)
 		return Tab
 	end
 
+	---------------------------------------------------------------- floating panels
+
+	local panelCount = 0
+	function Window:Panel(o)
+		o = o or {}
+		panelCount = panelCount + 1
+		local width = o.Width or 230
+		local frame = create("Frame", {
+			Parent = gui, Position = o.Position or UDim2.fromOffset(20, 80 + (panelCount - 1) * 30), Size = UDim2.fromOffset(width, 0),
+			AutomaticSize = Enum.AutomaticSize.Y, ZIndex = 5, Theme = { BackgroundColor3 = "Section" },
+		}, { corner(10), stroke("StrokeLight") })
+		create("UIScale", { Parent = frame, Scale = MOBILE and 0.9 or 1 })
+		create("UIListLayout", { Parent = frame, SortOrder = Enum.SortOrder.LayoutOrder })
+		local header = create("Frame", { Parent = frame, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 34), LayoutOrder = 0 })
+		local x = 12
+		if o.Icon and iconImage(o.Icon) then
+			Icon(o.Icon, 15, "Accent", { Parent = header, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 12, 0.5, 0) })
+			x = 34
+		end
+		local titleLbl = text({
+			Parent = header, Text = o.Title or "Panel", Weight = "SemiBold", Position = UDim2.fromOffset(x, 0), Size = UDim2.new(1, -x - 12, 1, 0),
+		})
+		create("Frame", {
+			Parent = header, BorderSizePixel = 0, Position = UDim2.new(0, 0, 1, -1), Size = UDim2.new(1, 0, 0, 1),
+			Theme = { BackgroundColor3 = "Stroke" },
+		})
+		local body = create("Frame", {
+			Parent = frame, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = 1,
+		}, {
+			create("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder }),
+			padding(10, 12, 12, 12),
+		})
+
+		header.InputBegan:Connect(function(input)
+			if not isPress(input) then return end
+			local start = vec2(input.Position)
+			local startPos = frame.Position
+			Pointer.track(input, function(pos)
+				local d = pos - start
+				frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+			end)
+		end)
+
+		local P = { Frame = frame }
+		local rows = 0
+		local function nextRow(h)
+			rows = rows + 1
+			return create("Frame", { Parent = body, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, h), LayoutOrder = rows })
+		end
+		function P:SetTitle(t) titleLbl.Text = t end
+		function P:SetVisible(v) frame.Visible = v end
+		function P:Destroy() frame:Destroy() end
+		function P:Text(t)
+			local row = nextRow(0)
+			row.AutomaticSize = Enum.AutomaticSize.Y
+			local l = text({
+				Parent = row, Text = t or "", TextSize = 12, TextWrapped = true, RichText = true,
+				Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Theme = { TextColor3 = "SubText" },
+			})
+			return { Set = function(_, v) l.Text = v end, Row = row }
+		end
+		function P:Row(name, value)
+			local row = nextRow(16)
+			text({ Parent = row, Text = name or "", TextSize = 12, Size = UDim2.new(0.5, 0, 1, 0), Theme = { TextColor3 = "DimText" } })
+			local v = text({
+				Parent = row, Text = tostring(value or ""), TextSize = 12, Weight = "Medium", TextXAlignment = Enum.TextXAlignment.Right,
+				AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.new(0.5, 0, 1, 0),
+				TextTruncate = Enum.TextTruncate.AtEnd, Theme = false, TextColor3 = T().Text,
+			})
+			local r = { Row = row }
+			function r:Set(val, color)
+				v.Text = tostring(val)
+				v.TextColor3 = color or T().Text
+			end
+			return r
+		end
+		function P:Bar(bo)
+			bo = bo or {}
+			local row = nextRow(18)
+			local barBg = create("Frame", {
+				Parent = row, Size = UDim2.fromScale(1, 1), Theme = { BackgroundColor3 = "ToggleOff" },
+			}, { corner(5) })
+			local fill = create("Frame", { Parent = barBg, BackgroundColor3 = bo.Color or Color3.new(1, 1, 1), Size = UDim2.fromScale(1, 1) }, { corner(5) })
+			if not bo.Color then accentGradient(0).Parent = fill end
+			local lbl = text({
+				Parent = barBg, Text = "", TextSize = 11, Weight = "SemiBold", TextXAlignment = Enum.TextXAlignment.Center,
+				Size = UDim2.fromScale(1, 1), ZIndex = 2, Theme = false, TextColor3 = Color3.new(1, 1, 1),
+			})
+			local r = { Row = row }
+			function r:Set(value, max)
+				max = max or bo.Max or 100
+				local pct = max > 0 and math.clamp(value / max, 0, 1) or 0
+				tween(fill, { Size = UDim2.fromScale(pct, 1) }, 0.25)
+				lbl.Text = string.format("%s / %s", tostring(math.floor(value + 0.5)), tostring(max))
+			end
+			r:Set(bo.Value or 0, bo.Max)
+			return r
+		end
+		function P:Clear()
+			for _, c in ipairs(body:GetChildren()) do
+				if c:IsA("Frame") then c:Destroy() end
+			end
+		end
+		frame.BackgroundTransparency = 1
+		tween(frame, { BackgroundTransparency = 0 }, 0.3)
+		return P
+	end
+
+	function Window:Watermark(o)
+		o = o or {}
+		local frame = create("Frame", {
+			Parent = gui, Position = o.Position or (MOBILE and UDim2.new(0.5, 0, 0, 10) or UDim2.fromOffset(16, 16)),
+			AnchorPoint = MOBILE and Vector2.new(0.5, 0) or Vector2.new(0, 0),
+			Size = UDim2.fromOffset(0, 28), AutomaticSize = Enum.AutomaticSize.X, ZIndex = 6,
+			Theme = { BackgroundColor3 = "Section" },
+		}, { corner(8), stroke("StrokeLight"), padding(0, 12, 0, 10) })
+		create("UIListLayout", {
+			Parent = frame, FillDirection = Enum.FillDirection.Horizontal, VerticalAlignment = Enum.VerticalAlignment.Center,
+			Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder,
+		})
+		create("Frame", {
+			Parent = frame, BackgroundColor3 = Color3.new(1, 1, 1), Size = UDim2.fromOffset(3, 14), LayoutOrder = 0,
+		}, { corner(2), accentGradient(90) })
+		local lbl = text({
+			Parent = frame, Text = "", TextSize = 12, Weight = "Medium", Size = UDim2.fromOffset(0, 28),
+			AutomaticSize = Enum.AutomaticSize.X, LayoutOrder = 1, RichText = true,
+		})
+
+		local custom = o.Text
+		local frames, elapsed, fps = 0, 0, 60
+		local function ping()
+			local ok, value = pcall(function()
+				return game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue()
+			end)
+			return ok and value and math.floor(value) or nil
+		end
+		local function refresh()
+			local parts = { "<b>" .. (custom or opts.Title or "OrcaHub") .. "</b>" }
+			if o.ShowFPS ~= false then table.insert(parts, fps .. " fps") end
+			if o.ShowPing ~= false then
+				local p = ping()
+				if p then table.insert(parts, p .. " ms") end
+			end
+			if o.ShowTime ~= false then table.insert(parts, os.date("%H:%M")) end
+			lbl.Text = table.concat(parts, '  <font transparency="0.6">|</font>  ')
+		end
+		track(RunService.Heartbeat:Connect(function(dt)
+			frames = frames + 1
+			elapsed = elapsed + dt
+			if elapsed >= 0.5 then
+				fps = math.floor(frames / elapsed + 0.5)
+				frames, elapsed = 0, 0
+				if frame.Visible then refresh() end
+			end
+		end))
+		refresh()
+
+		frame.InputBegan:Connect(function(input)
+			if not isPress(input) then return end
+			local start = vec2(input.Position)
+			local startPos = frame.Position
+			Pointer.track(input, function(pos)
+				local d = pos - start
+				frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+			end)
+		end)
+
+		local W = { Frame = frame }
+		function W:SetVisible(v) frame.Visible = v end
+		function W:SetText(t)
+			custom = t
+			refresh()
+		end
+		function W:Destroy() frame:Destroy() end
+		Window.WatermarkObject = W
+		return W
+	end
+
+	function Window:KeybindList(o)
+		o = o or {}
+		local panel = self:Panel({
+			Title = o.Title or "Keybinds", Icon = o.Icon or "keyboard", Width = o.Width or 200,
+			Position = o.Position or UDim2.new(0, 16, 0.5, -60),
+		})
+		local rowsByEntry = {}
+		local elapsed = 0
+		local function refresh()
+			for _, entry in ipairs(Window.Keybinds) do
+				if entry.Key ~= Enum.KeyCode.Unknown then
+					local r = rowsByEntry[entry]
+					if not r then
+						r = panel:Row(entry.Name, "")
+						rowsByEntry[entry] = r
+					end
+					r.Row.Visible = true
+					local active = entry.IsActive and entry.IsActive()
+					r:Set("[" .. entry.Key.Name .. "]", active and T().Accent or T().SubText)
+				elseif rowsByEntry[entry] then
+					rowsByEntry[entry].Row.Visible = false
+				end
+			end
+		end
+		track(RunService.Heartbeat:Connect(function(dt)
+			elapsed = elapsed + dt
+			if elapsed >= 0.25 then
+				elapsed = 0
+				if panel.Frame.Visible then refresh() end
+			end
+		end))
+		refresh()
+		Window.KeybindListObject = panel
+		return panel
+	end
+
 	---------------------------------------------------------------- settings tab
 
 	function Window:CreateSettingsTab(o)
 		o = o or {}
 		local tab = self:Tab({ Name = o.Name or "Settings", Icon = o.Icon or "settings", Description = "Interface and configs" })
-		local ui = tab:Section({ Name = "Interface", Side = "Left", Icon = "palette" })
+		local ui = tab:Section({ Name = "Interface", Side = "Left", Icon = "palette", Collapsed = false })
 
 		local themeNames = {}
 		for name in pairs(OrcaHub.Themes) do table.insert(themeNames, name) end
@@ -2328,13 +3091,34 @@ function OrcaHub:CreateWindow(opts)
 			Name = "Toggle Key", Default = Window.ToggleKey, Flag = "__OrcaToggleKey",
 			ChangedCallback = function(k) Window:SetToggleKey(k) end,
 		})
+		ui:Toggle({ Name = "Compact Sidebar", Default = Window.Compact, Callback = function(v) Window:SetCompact(v) end })
 		ui:Toggle({
-			Name = "Compact Sidebar", Default = Window.Compact,
-			Callback = function(v) Window:SetCompact(v) end,
+			Name = "Floating Toggle Button", Default = fabAlways, Flag = "__OrcaFab",
+			Tooltip = "A button that stays on screen to open and close the menu.",
+			Callback = function(v) Window:SetToggleButtonVisible(v) end,
+		})
+		ui:Toggle({
+			Name = "One Section Open At A Time", Default = Window.Accordion, Flag = "__OrcaAccordion",
+			Tooltip = "Opening a section closes the others on the same page. Handy on small screens.",
+			Callback = function(v) Window.Accordion = v end,
+		})
+		ui:Toggle({
+			Name = "Watermark", Default = false, Flag = "__OrcaWatermark",
+			Callback = function(v)
+				if v and not Window.WatermarkObject then Window:Watermark() end
+				if Window.WatermarkObject then Window.WatermarkObject:SetVisible(v) end
+			end,
+		})
+		ui:Toggle({
+			Name = "Keybind List", Default = false, Flag = "__OrcaKeybindList",
+			Callback = function(v)
+				if v and not Window.KeybindListObject then Window:KeybindList() end
+				if Window.KeybindListObject then Window.KeybindListObject:SetVisible(v) end
+			end,
 		})
 		ui:Button({ Name = "Reset Section Layout", Icon = "rotate-ccw", Callback = function() Window:ResetLayout() end })
 
-		local cfg = tab:Section({ Name = "Configs", Side = "Right", Icon = "folder" })
+		local cfg = tab:Section({ Name = "Configs", Side = "Right", Icon = "folder", Collapsed = false })
 		if not hasFS() then
 			cfg:Label("Your executor doesn't support saving files.")
 			return tab
@@ -2400,6 +3184,7 @@ function OrcaHub:CreateWindow(opts)
 		self.Destroyed = true
 		for _, c in ipairs(self.Conns) do pcall(function() c:Disconnect() end) end
 		self.Conns = {}
+		Pointer.stop()
 		for i = #Refreshers, 1, -1 do Refreshers[i] = nil end
 		for inst in pairs(Themed) do Themed[inst] = nil end
 		OrcaHub.Options = {}
@@ -2410,11 +3195,65 @@ function OrcaHub:CreateWindow(opts)
 		task.delay(0.22, function() gui:Destroy() end)
 	end
 
-	-- opening animation
-	uiScale.Scale = Window.Scale * 0.94
-	cover.BackgroundTransparency = 0
-	tween(uiScale, { Scale = Window.Scale }, 0.5, Enum.EasingStyle.Back)
-	tween(cover, { BackgroundTransparency = 1 }, 0.4)
+	---------------------------------------------------------------- opening (optional loading screen)
+
+	if opts.Loading then
+		local l = type(opts.Loading) == "table" and opts.Loading or {}
+		holder.Visible = false
+		Window.Visible = false
+		fab.Visible = false
+		local splash = create("Frame", {
+			Parent = gui, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+			Size = UDim2.fromOffset(300, 150), ZIndex = 50, Theme = { BackgroundColor3 = "Section" },
+		}, { corner(14), stroke("StrokeLight") })
+		local splashScale = create("UIScale", { Parent = splash, Scale = 0.9 })
+		local splashLogo = create("Frame", {
+			Parent = splash, AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 22),
+			Size = UDim2.fromOffset(44, 44), BackgroundColor3 = Color3.new(1, 1, 1),
+		}, { corner(12), accentGradient(45) })
+		local splashIcon = Icon(opts.Icon or "waves", 24, nil, {
+			Parent = splashLogo, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5), ImageColor3 = Color3.new(1, 1, 1),
+		})
+		text({
+			Parent = splash, Text = l.Title or opts.Title or "OrcaHub", Weight = "Bold", TextSize = 16,
+			TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 74), Size = UDim2.new(1, 0, 0, 20),
+		})
+		local sub = text({
+			Parent = splash, Text = l.Subtitle or "Loading...", TextSize = 12,
+			TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(0, 96), Size = UDim2.new(1, 0, 0, 16),
+			Theme = { TextColor3 = "DimText" },
+		})
+		local barBg = create("Frame", {
+			Parent = splash, AnchorPoint = Vector2.new(0.5, 1), Position = UDim2.new(0.5, 0, 1, -18),
+			Size = UDim2.new(1, -48, 0, 4), Theme = { BackgroundColor3 = "ToggleOff" },
+		}, { corner(2) })
+		local barFill = create("Frame", { Parent = barBg, BackgroundColor3 = Color3.new(1, 1, 1), Size = UDim2.fromScale(0, 1) }, { corner(2), accentGradient(0) })
+		tween(splashScale, { Scale = 1 }, 0.4, Enum.EasingStyle.Back)
+		local duration = l.Duration or 1.6
+		task.spawn(function()
+			tween(barFill, { Size = UDim2.fromScale(1, 1) }, duration, Enum.EasingStyle.Quad)
+			tween(splashIcon, { Rotation = 360 }, duration, Enum.EasingStyle.Quad)
+			task.wait(duration * 0.6)
+			sub.Text = l.Done or "Ready"
+			task.wait(duration * 0.4 + 0.15)
+			tween(splashScale, { Scale = 0.9 }, 0.2)
+			for _, d in ipairs(splash:GetDescendants()) do
+				if d:IsA("TextLabel") then tween(d, { TextTransparency = 1 }, 0.2) end
+				if d:IsA("ImageLabel") then tween(d, { ImageTransparency = 1 }, 0.2) end
+				if d:IsA("Frame") then tween(d, { BackgroundTransparency = 1 }, 0.2) end
+				if d:IsA("UIStroke") then tween(d, { Transparency = 1 }, 0.2) end
+			end
+			tween(splash, { BackgroundTransparency = 1 }, 0.2)
+			task.wait(0.22)
+			splash:Destroy()
+			if not Window.Destroyed then Window:SetVisible(true) end
+		end)
+	else
+		uiScale.Scale = Window.Scale * 0.94
+		cover.BackgroundTransparency = 0
+		tween(uiScale, { Scale = Window.Scale }, 0.5, Enum.EasingStyle.Back)
+		tween(cover, { BackgroundTransparency = 1 }, 0.4)
+	end
 
 	return Window
 end
