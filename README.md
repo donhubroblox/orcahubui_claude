@@ -28,18 +28,28 @@ local OrcaHub = loadstring(game:HttpGet("https://raw.githubusercontent.com/donhu
 - **Drag a header** to move the section anywhere, including the other column. On mobile, press and hold first, so normal swipes still scroll.
 - Layout and open/closed state are remembered. An optional "one section open at a time" mode keeps small screens tidy.
 
+**Resizing**
+- Drag **any edge or corner** of the window. A thin accent line shows on the edge under the mouse, and a corner grip also works on touch screens.
+- **Double-click (or double-tap) the title bar**, or use the maximize button, to fill the screen and back.
+- Settings has size presets (Small, Medium, Large, Fit Screen, Auto) and an interface scale slider.
+- Size and position are remembered between runs.
+
 **Mobile**
 - The window sizes itself to the screen. The sidebar starts as icons only, and sections start closed so the page stays compact.
 - A **floating button** opens and closes the menu. Drag it anywhere and it snaps to the nearest edge. It can also be turned on for PC in Settings.
 - Bigger touch targets, and narrow screens switch to one column.
+- On narrow windows (phones in portrait) the tabs move to a **bottom navigation bar**, and search shrinks to an icon that expands when tapped.
 
 **Building blocks**
 - Tabs with **sub-tabs** (e.g. Silent Aim / Aimbot / Weapon)
-- Toggle, button, slider, dropdown (single, multi or searchable), input, keybind, colour picker, label, paragraph, divider
+- Toggle (switch or checkbox style), button, slider, dropdown (single, multi or searchable), **segmented control**, **progress bar**, input, keybind, colour picker, label, paragraph, divider
+- **Locked elements** (e.g. "Premium") that explain themselves when clicked
 - **Keybinds and colour pickers attached to a toggle**, on the same row
 - **Search across all tabs**, with match counts on each tab
 - **Floating panels** (e.g. a Target Info card), a **watermark** (FPS, ping, time) and a **keybind list**
-- Notifications (Info, Success, Warning, Error), confirm dialogs, an optional **loading screen** and **key system**
+- Notifications (Info, Success, Warning, Error) with optional buttons, confirm dialogs, an optional **key system**
+- A **loading screen** with a spinning ring around the logo, step-by-step status, a shimmering progress bar and percentage, which then morphs into the window
+- Custom accent colours, and **copy/paste settings** to share them with friends
 - Configs (save, load, delete, autoload) and a ready-made Settings tab
 
 ## Mobile preview (no phone needed)
@@ -92,7 +102,9 @@ See [`Example.lua`](Example.lua) for a full demo.
 
 | Method | Options |
 | --- | --- |
-| `OrcaHub:CreateWindow(opts)` | `Title`, `Subtitle`, `Icon`, `Footer`, `Size` (Vector2/UDim2), `ToggleKey`, `Theme`, `Compact`, `SectionsCollapsed`, `Accordion`, `ToggleButton`, `Loading` (true or `{ Title, Subtitle, Duration }`), `ShowProfile`, `Folder`, `ConfigKey` |
+| `OrcaHub:CreateWindow(opts)` | `Title`, `Subtitle`, `Icon`, `Footer`, `Size` (Vector2/UDim2), `ToggleKey`, `Theme`, `Compact`, `SectionsCollapsed`, `Accordion`, `ToggleButton`, `Loading` (true or `{ Title, Steps, Duration, Done }`), `ShowProfile`, `Folder`, `ConfigKey` |
+| `Window:SetLoadingStatus(text, progress)` | Report real progress (0-1) while the loading screen is showing |
+| `Window:SetSize(Vector2, animate)` / `Window:ToggleMaximize()` / `Window:SetAutoSize()` | |
 | `Window:Tab(opts)` | `Name`, `Icon`, `Description` |
 | `Window:Divider(text)` | Group label in the sidebar |
 | `Window:Panel(opts)` | `Title`, `Icon`, `Width`, `Position`. Returns a panel with `:Row(name, value)`, `:Bar({ Value, Max, Color })`, `:Text(text)`, `:SetTitle`, `:SetVisible`, `:Clear`, `:Destroy` |
@@ -122,7 +134,9 @@ Every element accepts `Tooltip = "..."` to show an info icon with an explanation
 
 | Method | Options | Returned object |
 | --- | --- | --- |
-| `Section:Toggle(opts)` | `Name`, `Description`, `Default`, `Flag`, `Callback(bool)` | `:Set(v)`, `:Get()`, `:AddKeybind(opts)`, `:AddColorpicker(opts)` |
+| `Section:Toggle(opts)` | `Name`, `Description`, `Default`, `Style` (`"Checkbox"`), `Flag`, `Callback(bool)` | `:Set(v)`, `:Get()`, `:AddKeybind(opts)`, `:AddColorpicker(opts)` |
+| `Section:Segmented(opts)` | `Name`, `Options`, `Default`, `Flag`, `Callback(value)` | `:Set(v)`, `:Get()` |
+| `Section:Progress(opts)` | `Name`, `Value`, `Max`, `Color`, `Format(value, max)` | `:Set(value, max)`, `:Get()` |
 | `Section:Button(opts)` | `Name`, `Icon`, `Style` (`"Primary"`), `Callback()` | `:Fire()` |
 | `Section:Slider(opts)` | `Name`, `Min`, `Max`, `Default`, `Increment`, `Suffix`, `OnRelease`, `Flag`, `Callback(number)` | `:Set(v)`, `:Get()` |
 | `Section:Dropdown(opts)` | `Name`, `Options`, `Default`, `Multi`, `Searchable`, `Flag`, `Callback(value)` | `:Set(v)`, `:Get()`, `:Refresh(options, keepSelection)` |
@@ -135,12 +149,13 @@ Every element accepts `Tooltip = "..."` to show an info icon with an explanation
 
 `toggle:AddKeybind({ Default, Mode, Flag, Callback })`: `Mode = "Toggle"` (default) flips the toggle on each press; `"Hold"` keeps it on only while the key is held. `toggle:AddColorpicker({ Default, Flag, Callback })` adds a small swatch.
 
-Every element also has `:SetVisible(bool)` and `:Destroy()`. Elements with a `Flag` store their value in `OrcaHub.Flags[flag]`, and configs save them.
+Every element also has `:SetVisible(bool)`, `:Lock(reason)`, `:Unlock()` and `:Destroy()`. Pass `Locked = "Premium"` to create it locked. Elements with a `Flag` store their value in `OrcaHub.Flags[flag]`, and configs save them.
 
 ### Notifications
 
 ```lua
 OrcaHub:Notify({ Title = "Saved", Content = "Config saved.", Type = "Success", Duration = 4 })
+OrcaHub:Notify({ Title = "Update", Content = "Open settings?", Buttons = { { Title = "Open", Primary = true, Callback = fn }, { Title = "Later" } } })
 ```
 
 ### Key system
@@ -164,6 +179,8 @@ OrcaHub:LoadConfig("legit")
 OrcaHub:ListConfigs()
 OrcaHub:SetAutoload("legit")
 OrcaHub:LoadAutoloadConfig()
+local text = OrcaHub:ExportConfig()   -- share as text
+OrcaHub:ImportConfig(text)
 ```
 
 Files go in `OrcaHub/configs/<PlaceId>/` in the executor workspace.
@@ -195,6 +212,12 @@ python3 ../rbx-ui-testkit/rbxtest.py run Example.lua --lib OrcaHub.lua --fuzz --
 
 ## Versions
 
+- **2.2.0**:
+  - Resize from any edge or corner, maximize, size presets, and the window size and position are remembered.
+  - Bottom navigation bar on narrow screens, and a collapsible search box.
+  - New loading screen.
+  - Segmented control, progress bar, checkbox toggles, locked elements and notification buttons.
+  - Custom accent colours, and copy/paste settings.
 - **2.1.1**: mobile preview mode (`ExampleMobile.lua`).
 - **2.1.0**:
   - Tap a header to open or close a section; long-press to drag on mobile.
