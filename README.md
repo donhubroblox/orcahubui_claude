@@ -18,7 +18,7 @@ A clean, modern UI library for Roblox script hubs, built for OrcaHub. It works i
 ## Loading
 
 ```lua
-local OrcaHub = loadstring(game:HttpGet("https://raw.githubusercontent.com/donhubroblox/orcahubui-/main/OrcaHub.lua"))()
+local OrcaHub = loadstring(game:HttpGet("https://raw.githubusercontent.com/donhubroblox/orcahubui_claude/main/OrcaHub.lua"))()
 ```
 
 > The repository must be **public** for `HttpGet` to work. While it is private, put `OrcaHub.lua` in your executor's workspace folder and load it with `loadstring(readfile("OrcaHub.lua"))()`.

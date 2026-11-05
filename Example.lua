@@ -1,5 +1,5 @@
 local source = (isfile and isfile("OrcaHub.lua")) and readfile("OrcaHub.lua")
-	or game:HttpGet("https://raw.githubusercontent.com/donhubroblox/orcahubui-/main/OrcaHub.lua")
+	or game:HttpGet("https://raw.githubusercontent.com/donhubroblox/orcahubui_claude/main/OrcaHub.lua")
 local OrcaHub = loadstring(source)()
 
 local Window = OrcaHub:CreateWindow({

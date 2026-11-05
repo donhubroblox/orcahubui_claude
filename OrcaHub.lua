@@ -1,8 +1,8 @@
 --[[
 	OrcaHub UI Library
-	https://github.com/donhubroblox/orcahubui-
+	https://github.com/donhubroblox/orcahubui_claude
 
-	local OrcaHub = loadstring(game:HttpGet("https://raw.githubusercontent.com/donhubroblox/orcahubui-/main/OrcaHub.lua"))()
+	local OrcaHub = loadstring(game:HttpGet("https://raw.githubusercontent.com/donhubroblox/orcahubui_claude/main/OrcaHub.lua"))()
 	local Window = OrcaHub:CreateWindow({ Title = "OrcaHub" })
 ]]
 
