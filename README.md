@@ -42,6 +42,23 @@ local OrcaHub = loadstring(game:HttpGet("https://raw.githubusercontent.com/donhu
 - Notifications (Info, Success, Warning, Error), confirm dialogs, an optional **loading screen** and **key system**
 - Configs (save, load, delete, autoload) and a ready-made Settings tab
 
+## Mobile preview (no phone needed)
+
+Run [`ExampleMobile.lua`](ExampleMobile.lua) on PC to see the mobile version inside a simulated device. Use the buttons above it to switch between phone landscape, phone portrait and tablet, or to close the preview.
+
+```lua
+loadstring(game:HttpGet("https://raw.githubusercontent.com/donhubroblox/orcahubui_claude/main/ExampleMobile.lua"))()
+```
+
+To preview your own script, set the flag before loading OrcaHub:
+
+```lua
+getgenv().OrcaHubMobilePreview = "Phone" -- or "Portrait" / "Tablet"
+local OrcaHub = loadstring(game:HttpGet(".../OrcaHub.lua"))()
+```
+
+The flag only applies to that one load, so your normal scripts are unaffected. Touch-only gestures (press-and-hold to drag) behave like mouse input in the preview.
+
 ## Quick start
 
 ```lua
@@ -178,6 +195,7 @@ python3 ../rbx-ui-testkit/rbxtest.py run Example.lua --lib OrcaHub.lua --fuzz --
 
 ## Versions
 
+- **2.1.1**: mobile preview mode (`ExampleMobile.lua`).
 - **2.1.0**:
   - Tap a header to open or close a section; long-press to drag on mobile.
   - Sub-tabs, toggle keybind and colour add-ons, floating panels, watermark, keybind list, key system, loading screen and tooltips.

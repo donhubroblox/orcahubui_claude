@@ -19,7 +19,7 @@ local GuiService = Service("GuiService")
 local LocalPlayer = Players.LocalPlayer
 
 local OrcaHub = {
-	Version = "2.1.0",
+	Version = "2.1.1",
 	Flags = {},
 	Options = {},
 	Icons = {},
@@ -69,6 +69,21 @@ OrcaHub.Themes = {
 OrcaHub.Theme = {}
 for k, v in pairs(OrcaHub.Themes.Orca) do OrcaHub.Theme[k] = v end
 local function T() return OrcaHub.Theme end
+
+-- Mobile preview: set getgenv().OrcaHubMobilePreview = true (or "Portrait"/"Tablet") before loading
+-- to see the mobile layout inside a simulated device on PC.
+local PREVIEW
+do
+	local env0 = (type(getgenv) == "function" and getgenv()) or _G
+	PREVIEW = env0.OrcaHubMobilePreview
+	env0.OrcaHubMobilePreview = nil
+	if PREVIEW then OrcaHub.IsMobile = true end
+end
+local PREVIEW_DEVICES = {
+	{ Name = "Phone", Label = "Phone (landscape)", Size = Vector2.new(844, 390) },
+	{ Name = "Portrait", Label = "Phone (portrait)", Size = Vector2.new(390, 780) },
+	{ Name = "Tablet", Label = "Tablet", Size = Vector2.new(1000, 640) },
+}
 
 local MOBILE = OrcaHub.IsMobile
 local ROW_H = MOBILE and 34 or 32
@@ -275,6 +290,7 @@ local function protect(gui)
 end
 
 local function viewport()
+	if OrcaHub.PreviewSize then return OrcaHub.PreviewSize end
 	local cam = workspace.CurrentCamera
 	return cam and cam.ViewportSize or Vector2.new(1280, 720)
 end
@@ -662,6 +678,92 @@ function OrcaHub:KeySystem(o)
 	return result
 end
 
+---------------------------------------------------------------- mobile preview device
+
+local function buildPreview(window, gui, choice)
+	local deviceIndex = 1
+	for i, d in ipairs(PREVIEW_DEVICES) do
+		if d.Name == choice then deviceIndex = i end
+	end
+	local device = PREVIEW_DEVICES[deviceIndex]
+	OrcaHub.PreviewSize = device.Size
+
+	create("Frame", {
+		Parent = gui, Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.35,
+	})
+	local bezel = create("Frame", {
+		Parent = gui, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 22),
+		Size = UDim2.fromOffset(device.Size.X + 24, device.Size.Y + 24), BackgroundColor3 = rgb(8, 8, 10),
+	}, { corner(38), create("UIStroke", { Color = rgb(60, 62, 70), Thickness = 2 }) })
+	local screen = create("Frame", {
+		Parent = bezel, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+		Size = UDim2.fromOffset(device.Size.X, device.Size.Y), ClipsDescendants = true,
+		BackgroundColor3 = Color3.new(1, 1, 1),
+	}, {
+		corner(26),
+		create("UIGradient", {
+			Rotation = 90,
+			Color = ColorSequence.new({
+				ColorSequenceKeypoint.new(0, rgb(110, 170, 230)),
+				ColorSequenceKeypoint.new(0.55, rgb(170, 210, 240)),
+				ColorSequenceKeypoint.new(0.56, rgb(96, 160, 80)),
+				ColorSequenceKeypoint.new(1, rgb(70, 125, 60)),
+			}),
+		}),
+	})
+
+	local bar = create("Frame", {
+		Parent = gui, AnchorPoint = Vector2.new(0.5, 1), BackgroundTransparency = 1,
+		Position = UDim2.new(0.5, 0, 0.5, 22 - (device.Size.Y + 24) / 2 - 10), Size = UDim2.fromOffset(700, 34),
+	}, {
+		create("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Center,
+			VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder,
+		}),
+	})
+	local caption = text({
+		Parent = bar, Text = "", Weight = "SemiBold", TextSize = 13, LayoutOrder = 0, Theme = false,
+		TextColor3 = Color3.new(1, 1, 1), Size = UDim2.fromOffset(0, 30), AutomaticSize = Enum.AutomaticSize.X,
+	})
+	local buttons = {}
+	local function pill(label, order, onClick)
+		local b = text({
+			Class = "TextButton", Parent = bar, Text = label, TextSize = 12, Weight = "Medium", AutoButtonColor = false,
+			TextXAlignment = Enum.TextXAlignment.Center, LayoutOrder = order, Theme = false,
+			BackgroundTransparency = 0, BackgroundColor3 = rgb(30, 33, 40), TextColor3 = rgb(220, 225, 235),
+			Size = UDim2.fromOffset(0, 28), AutomaticSize = Enum.AutomaticSize.X,
+		})
+		corner(14).Parent = b
+		padding(0, 12, 0, 12).Parent = b
+		b.MouseButton1Click:Connect(onClick)
+		return b
+	end
+
+	local function apply(index)
+		deviceIndex = index
+		device = PREVIEW_DEVICES[index]
+		OrcaHub.PreviewSize = device.Size
+		caption.Text = "Mobile preview: " .. device.Label .. "  " .. device.Size.X .. "x" .. device.Size.Y .. "   "
+		bezel.Size = UDim2.fromOffset(device.Size.X + 24, device.Size.Y + 24)
+		screen.Size = UDim2.fromOffset(device.Size.X, device.Size.Y)
+		bar.Position = UDim2.new(0.5, 0, 0.5, 22 - (device.Size.Y + 24) / 2 - 10)
+		for i, b in ipairs(buttons) do
+			b.BackgroundColor3 = i == index and OrcaHub.Theme.Accent or rgb(30, 33, 40)
+		end
+		if window._updateScale then
+			window:_updateScale()
+			for _, tab in ipairs(window.Tabs) do tab:_relayout(false) end
+			task.defer(function() if window._moveIndicator then window:_moveIndicator(false) end end)
+		end
+	end
+	for i, d in ipairs(PREVIEW_DEVICES) do
+		buttons[i] = pill(d.Name, i, function() apply(i) end)
+	end
+	pill("Close preview", 10, function() if window.Destroy then window:Destroy() end end)
+	apply(deviceIndex)
+	return screen
+end
+
 ---------------------------------------------------------------- window
 
 function OrcaHub:CreateWindow(opts)
@@ -710,9 +812,12 @@ function OrcaHub:CreateWindow(opts)
 
 	local gui = newScreenGui(100)
 	Window.Gui = gui
+	local screen = gui
+	if PREVIEW then screen = buildPreview(Window, gui, PREVIEW) end
+	Window.Screen = screen
 
 	Window.NotifyHolder = create("Frame", {
-		Parent = gui, BackgroundTransparency = 1, ZIndex = 20,
+		Parent = screen, BackgroundTransparency = 1, ZIndex = 20,
 		AnchorPoint = MOBILE and Vector2.new(1, 0) or Vector2.new(1, 1),
 		Position = MOBILE and UDim2.new(1, -12, 0, 12) or UDim2.new(1, -16, 1, -16),
 		Size = UDim2.new(0, MOBILE and 260 or 300, 1, -32),
@@ -726,7 +831,7 @@ function OrcaHub:CreateWindow(opts)
 	---------------------------------------------------------------- shell
 
 	local holder = create("Frame", {
-		Parent = gui, BackgroundTransparency = 1,
+		Parent = screen, BackgroundTransparency = 1,
 		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 		Size = UDim2.fromOffset(size.X, size.Y),
 	})
@@ -1094,7 +1199,7 @@ function OrcaHub:CreateWindow(opts)
 	local fabAlways = opts.ToggleButton
 	if fabAlways == nil then fabAlways = MOBILE end
 	local fab = create("TextButton", {
-		Parent = gui, Text = "", AutoButtonColor = false, BackgroundColor3 = Color3.new(1, 1, 1),
+		Parent = screen, Text = "", AutoButtonColor = false, BackgroundColor3 = Color3.new(1, 1, 1),
 		AnchorPoint = Vector2.new(0.5, 0.5), Position = env.__OrcaHubFabPosition or UDim2.new(0, 40, 0.5, 0),
 		Size = UDim2.fromOffset(MOBILE and 52 or 46, MOBILE and 52 or 46),
 		Visible = fabAlways, ZIndex = 10,
@@ -1129,7 +1234,7 @@ function OrcaHub:CreateWindow(opts)
 			end
 			-- snap to the nearest side and keep it on screen
 			local vp = viewport()
-			local centre = fab.AbsolutePosition + fab.AbsoluteSize / 2
+			local centre = fab.AbsolutePosition - screen.AbsolutePosition + fab.AbsoluteSize / 2
 			local half = fab.AbsoluteSize.X / 2 + 12
 			local x = centre.X < vp.X / 2 and half or (vp.X - half)
 			local y = math.clamp(centre.Y, half, vp.Y - half - 40)
@@ -2859,7 +2964,7 @@ function OrcaHub:CreateWindow(opts)
 		panelCount = panelCount + 1
 		local width = o.Width or 230
 		local frame = create("Frame", {
-			Parent = gui, Position = o.Position or UDim2.fromOffset(20, 80 + (panelCount - 1) * 30), Size = UDim2.fromOffset(width, 0),
+			Parent = screen, Position = o.Position or UDim2.fromOffset(20, 80 + (panelCount - 1) * 30), Size = UDim2.fromOffset(width, 0),
 			AutomaticSize = Enum.AutomaticSize.Y, ZIndex = 5, Theme = { BackgroundColor3 = "Section" },
 		}, { corner(10), stroke("StrokeLight") })
 		create("UIScale", { Parent = frame, Scale = MOBILE and 0.9 or 1 })
@@ -2962,7 +3067,7 @@ function OrcaHub:CreateWindow(opts)
 	function Window:Watermark(o)
 		o = o or {}
 		local frame = create("Frame", {
-			Parent = gui, Position = o.Position or (MOBILE and UDim2.new(0.5, 0, 0, 10) or UDim2.fromOffset(16, 16)),
+			Parent = screen, Position = o.Position or (MOBILE and UDim2.new(0.5, 0, 0, 10) or UDim2.fromOffset(16, 16)),
 			AnchorPoint = MOBILE and Vector2.new(0.5, 0) or Vector2.new(0, 0),
 			Size = UDim2.fromOffset(0, 28), AutomaticSize = Enum.AutomaticSize.X, ZIndex = 6,
 			Theme = { BackgroundColor3 = "Section" },
@@ -3189,6 +3294,7 @@ function OrcaHub:CreateWindow(opts)
 		for inst in pairs(Themed) do Themed[inst] = nil end
 		OrcaHub.Options = {}
 		if OrcaHub.Window == self then OrcaHub.Window = nil end
+		OrcaHub.PreviewSize = nil
 		if env.__OrcaHubWindow == self then env.__OrcaHubWindow = nil end
 		tween(uiScale, { Scale = self.Scale * 0.94 }, 0.2)
 		tween(cover, { BackgroundTransparency = 0 }, 0.2)
@@ -3203,7 +3309,7 @@ function OrcaHub:CreateWindow(opts)
 		Window.Visible = false
 		fab.Visible = false
 		local splash = create("Frame", {
-			Parent = gui, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+			Parent = screen, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 			Size = UDim2.fromOffset(300, 150), ZIndex = 50, Theme = { BackgroundColor3 = "Section" },
 		}, { corner(14), stroke("StrokeLight") })
 		local splashScale = create("UIScale", { Parent = splash, Scale = 0.9 })
