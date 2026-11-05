@@ -36,20 +36,20 @@ expect(color:Get():ToHex() == "FF0000", "colour add-on keeps its colour")
 
 -- header tap collapses, tapping again expands
 local before = A:_height()
-rbx.click(A.Header)
+rbx.click(A.HeaderFrame)
 rbx.wait(0.5)
 expect(A.Collapsed == true and A:_height() < before, "tapping anywhere on a section header collapses it")
-rbx.click(A.Header)
+rbx.click(A.HeaderFrame)
 rbx.wait(0.5)
 expect(A.Collapsed == false, "tapping the header again expands it")
 
 -- dragging the header moves the section instead of collapsing it
 if MOBILE then
-	rbx.longPress(A.Header, 0.6)
+	rbx.longPress(A.HeaderFrame, 0.6)
 	rbx.wait(0.5)
 	expect(A.Collapsed == false, "long-press starts a drag instead of collapsing")
 else
-	rbx.drag(A.Header, 400, 0)
+	rbx.drag(A.HeaderFrame, 400, 0)
 	rbx.wait(0.5)
 	expect(A.Collapsed == false, "dragging a header does not collapse it")
 end
@@ -153,5 +153,107 @@ expect(Window.CurrentTab.Name == "Main", "bottom bar tabs still switch pages")
 Window:SetSize(Vector2.new(780, 500), false)
 rbx.wait(0.3)
 expect(Window.NavMode == false, "wide window returns to the sidebar")
+
+-- new in 2.3: more elements
+local E = Main:Section({ Name = "Elements", Collapsed = false })
+E:Header("Inputs")
+local num = E:Number({ Name = "Amount", Min = 0, Max = 10, Default = 5, Step = 1, Flag = "Amount" })
+local range = E:Range({ Name = "Distance", Min = 0, Max = 100, Default = { 20, 80 }, Flag = "Distance", Callback = function(a, b) log.range = { a, b } end })
+local radio = E:Radio({ Name = "Target", Options = { "Nearest", "Lowest HP" }, Default = "Nearest", Flag = "Target" })
+local area = E:TextArea({ Name = "Notes", Lines = 3, Flag = "Notes" })
+local value = E:Value({ Name = "Coins", Value = 10 })
+E:Code("print('hello')")
+E:Image({ Image = "user", Height = 60, Caption = "Avatar" })
+E:Space(6)
+E:Buttons({ { Name = "One", Callback = function() log.one = true end }, { Name = "Two", Style = "Primary" } })
+local tb = E:Textbox({ Name = "Alias Box" })
+local pd = E:PlayerDropdown({ Name = "Players", ExcludeLocal = false })
+rbx.wait(0.5)
+rbx.clickText("One")
+rbx.wait(0.2)
+expect(log.one == true, "button row buttons work")
+local plusBtn
+for _, d in ipairs(num.Row:GetDescendants()) do if d.ClassName == "TextButton" then plusBtn = d end end
+rbx.click(plusBtn)
+rbx.wait(0.2)
+expect(num:Get() == 6, "number input + button increments")
+num:Set(99)
+expect(num:Get() == 10, "number input clamps to max")
+range:Set({ 90, 10 })
+expect(range:Get()[1] == 10 and range:Get()[2] == 90, "range keeps low <= high")
+rbx.clickText("Lowest HP")
+rbx.wait(0.2)
+expect(radio:Get() == "Lowest HP", "radio group selects an option")
+area:Set("line 1\nline 2")
+expect(area:Get() == "line 1\nline 2", "multi-line text box keeps newlines")
+value:SetValue(25)
+expect(rbx.find("25") ~= nil, "value row updates")
+expect(tb.Type == "Input", "Textbox is an alias for Input")
+expect(#rbx.findAll(function(i) return i.ClassName == "TextLabel" and i.Text == "Player1" end) >= 0, "player dropdown builds")
+
+-- favourites through the right-click menu
+local favToggle = E:Toggle({ Name = "Starred Toggle", Flag = "Starred" })
+rbx.wait(0.2)
+local input = rbx.makeInput("MouseButton2", favToggle.Row.AbsolutePosition + rbx.v2(10, 10))
+rbx.fire(rbx.getEvent(favToggle.Row, "InputBegan"), input)
+rbx.wait(0.3)
+rbx.clickText("Add to favourites")
+rbx.wait(0.6)
+local favTab
+for _, t in ipairs(Window.Tabs) do if t.Name == "Favourites" then favTab = t end end
+expect(favTab ~= nil and not favTab.Hidden, "favourites tab appears")
+expect(table.find(Window.FavKeys, favToggle._key) ~= nil, "favourite key is stored")
+favTab:Select()
+rbx.wait(0.5)
+rbx.click(favToggle._mirrors[1].Row:FindFirstChildWhichIsA("TextButton"))
+rbx.wait(0.3)
+expect(favToggle:Get() == true, "toggling the favourite copy changes the original")
+favToggle:Set(false)
+rbx.wait(0.2)
+expect(favToggle._mirrors[1]:Get() == false, "changing the original updates the favourite copy")
+Window:ToggleFavourite(favToggle)
+rbx.wait(0.5)
+expect(favTab.Hidden == true, "favourites tab hides when empty")
+
+-- reset to default through the menu
+num:Set(3)
+rbx.fire(rbx.getEvent(num.Row, "InputBegan"), rbx.makeInput("MouseButton2", num.Row.AbsolutePosition))
+rbx.wait(0.3)
+rbx.clickText("Reset to default")
+rbx.wait(0.2)
+expect(num:Get() == 5, "reset to default restores the original value")
+
+-- lazy tabs build on first open, and saved configs still reach them
+local built = 0
+local lazyToggle
+OrcaHub:ImportConfig('{"LazyFlag": true}')
+local Lazy = Window:Tab({ Name = "Lazy", Icon = "layers", Badge = "NEW", Build = function(tab)
+	built = built + 1
+	lazyToggle = tab:Section({ Name = "Late", Collapsed = false }):Toggle({ Name = "Lazy Toggle", Flag = "LazyFlag" })
+end })
+expect(built == 0, "lazy tab is not built until opened")
+Lazy:Select()
+rbx.wait(0.3)
+expect(built == 1 and lazyToggle ~= nil, "lazy tab builds when opened")
+expect(lazyToggle:Get() == true, "config loaded before the tab was built is applied")
+Lazy:Select()
+expect(built == 1, "lazy tab builds only once")
+
+-- styles and themes
+for _, style in ipairs({ "Glass", "Sharp", "Soft", "Default" }) do OrcaHub:SetStyle(style) end
+for _, theme in ipairs({ "Midnight", "Sakura", "Light", "Orca" }) do OrcaHub:SetTheme(theme) end
+rbx.wait(0.5)
+expect(OrcaHub.StyleName == "Default" and OrcaHub.ThemeName == "Orca", "styles and themes switch")
+
+-- confirm dialog on buttons
+local confirmed = false
+E:Button({ Name = "Danger", Confirm = "Really?", Callback = function() confirmed = true end })
+rbx.wait(0.2)
+rbx.clickText("Danger")
+rbx.wait(0.4)
+expect(not confirmed, "confirm button waits for the dialog")
+rbx.clickText("Confirm")
+rbx.wait(0.4)
+expect(confirmed, "confirming runs the callback")
 
 rbx.expectNoErrors("feature tests ran without errors")

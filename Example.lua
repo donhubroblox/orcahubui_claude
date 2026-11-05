@@ -18,6 +18,39 @@ Window:Divider("Main")
 local Farming = Window:Tab({ Name = "Farming", Icon = "sprout", Description = "Automate planting, collecting and selling" })
 local Combat = Window:Tab({ Name = "Combat", Icon = "crosshair", Description = "Aim assistance" })
 local Shop = Window:Tab({ Name = "Shop & Misc", Icon = "shopping-cart", Description = "Buy seeds and gear" })
+-- built the first time it is opened
+Window:Tab({ Name = "Elements", Icon = "layers", Description = "Every input OrcaHub offers", Badge = "NEW", Build = function(tab)
+	local Inputs = tab:Section({ Name = "Inputs", Icon = "text-cursor-input", Side = "Left" })
+	Inputs:Header("Text")
+	Inputs:Textbox({ Name = "Webhook URL", Placeholder = "https://...", Icon = "link" })
+	Inputs:TextArea({ Name = "Chat Message", Placeholder = "Message to spam...", Lines = 3, Flag = "ChatMessage" })
+	Inputs:Header("Numbers")
+	Inputs:Number({ Name = "Seeds Per Buy", Min = 1, Max = 50, Default = 5, Flag = "SeedsPerBuy" })
+	Inputs:Range({ Name = "Sell Price Window", Min = 0, Max = 1000, Default = { 100, 750 }, Suffix = "¢", Flag = "SellWindow" })
+	Inputs:Slider({ Name = "Delay", Min = 0, Max = 2, Increment = 0.05, Default = 0.25, Suffix = "s", Flag = "Delay" })
+
+	local Choices = tab:Section({ Name = "Choices", Icon = "list", Side = "Right" })
+	Choices:Radio({ Name = "Target Priority", Options = { "Nearest", "Lowest Health", "Highest Value" }, Default = "Nearest", Flag = "Priority" })
+	Choices:Segmented({ Name = "Speed", Options = { "Slow", "Normal", "Fast" }, Default = "Normal", Flag = "Speed" })
+	Choices:PlayerDropdown({ Name = "Spectate Player" })
+	Choices:Toggle({ Name = "Use Checkbox Style", Style = "Checkbox" })
+
+	local Display = tab:Section({ Name = "Display", Icon = "image", Side = "Left" })
+	Display:Value({ Name = "Session Time", Value = "0m" })
+	Display:Value({ Name = "Seeds Bought", Value = "0" })
+	Display:Progress({ Name = "Quest Progress", Value = 3, Max = 5, Format = function(v, m) return v .. " / " .. m end })
+	Display:Code("loadstring(game:HttpGet(\"https://example.com/orcahub.lua\"))()")
+	Display:Image({ Image = "rbxassetid://10747376931", Height = 80, Caption = "Images work too" })
+
+	local Actions2 = tab:Section({ Name = "Actions", Icon = "mouse-pointer-click", Side = "Right" })
+	Actions2:Buttons({
+		{ Name = "Rejoin", Icon = "refresh-cw", Confirm = "Rejoin this server?" },
+		{ Name = "Server Hop", Icon = "shuffle", Style = "Primary", Confirm = true },
+	})
+	Actions2:Button({ Name = "Reset Character", Icon = "rotate-ccw", Confirm = "Reset your character?" })
+	Actions2:Paragraph({ Title = "Tip", Content = "Right-click (or long-press on mobile) any option to add it to Favourites or reset it." })
+end })
+
 Window:Divider("Player")
 local Player = Window:Tab({ Name = "Player", Icon = "user", Description = "Movement and visuals" })
 
@@ -100,12 +133,12 @@ Target:SetVisible(false)
 
 ---------------------------------------------------------------- Settings
 
-Window:CreateSettingsTab()
+local SettingsTab = Window:CreateSettingsTab()
 OrcaHub:LoadAutoloadConfig()
 
 OrcaHub:Notify({
 	Title = "OrcaHub loaded", Content = "Press RightShift to toggle the menu.", Duration = 6,
-	Buttons = { { Title = "Open Settings", Primary = true, Callback = function() Window.Tabs[#Window.Tabs]:Select() end }, { Title = "Dismiss" } },
+	Buttons = { { Title = "Open Settings", Primary = true, Callback = function() SettingsTab:Select() end }, { Title = "Dismiss" } },
 })
 
 task.spawn(function()

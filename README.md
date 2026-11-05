@@ -19,7 +19,8 @@ local OrcaHub = loadstring(game:HttpGet("https://raw.githubusercontent.com/donhu
 ## Features
 
 **Look and feel**
-- Ocean-blue gradient accent, soft shadow, Lucide icons, and four themes (Orca, Abyss, Reef, Coral)
+- Ocean-blue gradient accent, soft shadow, Lucide icons, and seven themes (Orca, Abyss, Reef, Coral, Midnight, Sakura, Light)
+- **Window styles**: Default, Glass (see-through with the game blurred behind it), Sharp corners and Soft corners
 - Animations throughout: spring window open, sliding tab highlight, page fades, springy toggles, ripple buttons, sliding popups and notifications
 - Highlight on the row under the mouse, tooltips (`Tooltip = "..."`) and a "No results" state for search
 
@@ -40,12 +41,18 @@ local OrcaHub = loadstring(game:HttpGet("https://raw.githubusercontent.com/donhu
 - Bigger touch targets, and narrow screens switch to one column.
 - On narrow windows (phones in portrait) the tabs move to a **bottom navigation bar**, and search shrinks to an icon that expands when tapped.
 
+**Favourites**
+- Right-click (or long-press on mobile) any option, then choose **Add to favourites**. It appears in a Favourites tab at the top of the sidebar.
+- Toggles, sliders, segmented controls and buttons work straight from Favourites and stay in sync with the original. Other options get a shortcut that jumps to them.
+- The same menu has **Reset to default**. Favourites are remembered between runs.
+
 **Building blocks**
-- Tabs with **sub-tabs** (e.g. Silent Aim / Aimbot / Weapon)
-- Toggle (switch or checkbox style), button, slider, dropdown (single, multi or searchable), **segmented control**, **progress bar**, input, keybind, colour picker, label, paragraph, divider
+- Tabs with **sub-tabs** (e.g. Silent Aim / Aimbot / Weapon), custom tab badges (e.g. "NEW"), and **lazily built tabs** that only create their contents when first opened
+- **Inputs**: toggle (switch or checkbox), button (optionally with a confirmation prompt), button row, slider, **range slider**, **number input** with − / +, dropdown (single, multi or searchable), **player dropdown**, segmented control, **radio group**, textbox, **multi-line text box**, keybind, colour picker
+- **Display**: label, paragraph, **sub-header**, **key/value row**, **code block** with a copy button, **image**, progress bar, divider, spacer
 - **Locked elements** (e.g. "Premium") that explain themselves when clicked
 - **Keybinds and colour pickers attached to a toggle**, on the same row
-- **Search across all tabs**, with match counts on each tab
+- **Search across all tabs**, with match counts on each tab. Press **Ctrl+F** to jump to the search box
 - **Floating panels** (e.g. a Target Info card), a **watermark** (FPS, ping, time) and a **keybind list**
 - Notifications (Info, Success, Warning, Error) with optional buttons, confirm dialogs, an optional **key system**
 - A **loading screen** with a spinning ring around the logo, step-by-step status, a shimmering progress bar and percentage, which then morphs into the window
@@ -105,7 +112,9 @@ See [`Example.lua`](Example.lua) for a full demo.
 | `OrcaHub:CreateWindow(opts)` | `Title`, `Subtitle`, `Icon`, `Footer`, `Size` (Vector2/UDim2), `ToggleKey`, `Theme`, `Compact`, `SectionsCollapsed`, `Accordion`, `ToggleButton`, `Loading` (true or `{ Title, Steps, Duration, Done }`), `ShowProfile`, `Folder`, `ConfigKey` |
 | `Window:SetLoadingStatus(text, progress)` | Report real progress (0-1) while the loading screen is showing |
 | `Window:SetSize(Vector2, animate)` / `Window:ToggleMaximize()` / `Window:SetAutoSize()` | |
-| `Window:Tab(opts)` | `Name`, `Icon`, `Description` |
+| `Window:Tab(opts)` | `Name`, `Icon`, `Description`, `Badge`, `Build` (function that fills the tab the first time it opens) |
+| `Window:SetTitle(text)` / `Window:SetSubtitle(text)` | |
+| `Window:ToggleFavourite(element)` | Stars or un-stars an element from code |
 | `Window:Divider(text)` | Group label in the sidebar |
 | `Window:Panel(opts)` | `Title`, `Icon`, `Width`, `Position`. Returns a panel with `:Row(name, value)`, `:Bar({ Value, Max, Color })`, `:Text(text)`, `:SetTitle`, `:SetVisible`, `:Clear`, `:Destroy` |
 | `Window:Watermark(opts)` | `Text`, `ShowFPS`, `ShowPing`, `ShowTime`, `Position` |
@@ -123,8 +132,8 @@ Running the script again closes the previous window first.
 | --- | --- |
 | `Tab:Section(opts)` | `Name`, `Icon`, `Side` (`"Left"`/`"Right"`), `Collapsed` |
 | `Tab:SubTab(opts)` | `Name`. Returns a sub-tab with `:Section(opts)` and `:Select()` |
-| `Tab:Select()` | |
-| `Section:SetCollapsed(bool)` / `Section:ToggleCollapsed()` | |
+| `Tab:Select()`, `Tab:SetBadge(text or nil)`, `Tab:SetHidden(bool)` | |
+| `Section:SetCollapsed(bool)` / `Section:ToggleCollapsed()` / `Section:SetTitle(text)` | |
 
 Use either sections directly on a tab, or sub-tabs; don't mix them on the same tab.
 
@@ -137,7 +146,18 @@ Every element accepts `Tooltip = "..."` to show an info icon with an explanation
 | `Section:Toggle(opts)` | `Name`, `Description`, `Default`, `Style` (`"Checkbox"`), `Flag`, `Callback(bool)` | `:Set(v)`, `:Get()`, `:AddKeybind(opts)`, `:AddColorpicker(opts)` |
 | `Section:Segmented(opts)` | `Name`, `Options`, `Default`, `Flag`, `Callback(value)` | `:Set(v)`, `:Get()` |
 | `Section:Progress(opts)` | `Name`, `Value`, `Max`, `Color`, `Format(value, max)` | `:Set(value, max)`, `:Get()` |
-| `Section:Button(opts)` | `Name`, `Icon`, `Style` (`"Primary"`), `Callback()` | `:Fire()` |
+| `Section:Button(opts)` | `Name`, `Icon`, `Style` (`"Primary"`), `Confirm` (true or a question), `Callback()` | `:Fire()` |
+| `Section:Buttons(list)` | List of `{ Name, Icon, Style, Confirm, Callback }` shown side by side | |
+| `Section:Number(opts)` | `Name`, `Min`, `Max`, `Default`, `Step`, `Suffix`, `Flag`, `Callback(number)` | `:Set(v)`, `:Get()` |
+| `Section:Range(opts)` | `Name`, `Min`, `Max`, `Default = { low, high }`, `Increment`, `Suffix`, `Flag`, `Callback(low, high)` | `:Set({ low, high })`, `:Get()` |
+| `Section:Radio(opts)` | `Name`, `Options`, `Default`, `Flag`, `Callback(value)` | `:Set(v)`, `:Get()` |
+| `Section:TextArea(opts)` | `Name`, `Default`, `Placeholder`, `Lines`, `Flag`, `Callback(text)` | `:Set(text)`, `:Get()` |
+| `Section:PlayerDropdown(opts)` | Dropdown options plus `ExcludeLocal` (default true). Updates when players join or leave | Dropdown object |
+| `Section:Textbox(opts)` | Same as `Input` | |
+| `Section:Header(text)` / `Section:Space(height)` | Sub-heading, empty space | |
+| `Section:Value(opts)` | `Name`, `Value` | `:SetValue(v)`, `:GetValue()` |
+| `Section:Code(text)` | Monospace block with a copy button | `:SetText(text)` |
+| `Section:Image(opts)` | `Image` (asset id or Lucide name), `Height`, `ScaleType`, `Caption` | `:SetImage(img)` |
 | `Section:Slider(opts)` | `Name`, `Min`, `Max`, `Default`, `Increment`, `Suffix`, `OnRelease`, `Flag`, `Callback(number)` | `:Set(v)`, `:Get()` |
 | `Section:Dropdown(opts)` | `Name`, `Options`, `Default`, `Multi`, `Searchable`, `Flag`, `Callback(value)` | `:Set(v)`, `:Get()`, `:Refresh(options, keepSelection)` |
 | `Section:Input(opts)` | `Name`, `Icon`, `Default`, `Placeholder`, `Numeric`, `Flag`, `Callback(text, enterPressed)` | `:Set(v)`, `:Get()` |
@@ -212,6 +232,12 @@ python3 ../rbx-ui-testkit/rbxtest.py run Example.lua --lib OrcaHub.lua --fuzz --
 
 ## Versions
 
+- **2.3.0**:
+  - Favourites, the right-click / long-press option menu with reset to default, and lazily built tabs.
+  - Glass, Sharp and Soft window styles, and Midnight, Sakura and Light themes.
+  - Number input, range slider, radio group, multi-line text box, player dropdown, button rows, sub-headers, key/value rows, code blocks, images and spacers.
+  - Confirmation prompts on buttons, tab badges, Ctrl+F search, and runtime renaming.
+  - The section header frame is now `Section.HeaderFrame`, because `Section:Header()` now adds a sub-heading.
 - **2.2.0**:
   - Resize from any edge or corner, maximize, size presets, and the window size and position are remembered.
   - Bottom navigation bar on narrow screens, and a collapsible search box.

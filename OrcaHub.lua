@@ -19,7 +19,7 @@ local GuiService = Service("GuiService")
 local LocalPlayer = Players.LocalPlayer
 
 local OrcaHub = {
-	Version = "2.2.0",
+	Version = "2.3.0",
 	Flags = {},
 	Options = {},
 	Icons = {},
@@ -27,6 +27,7 @@ local OrcaHub = {
 	FontFamily = "rbxasset://fonts/families/GothamSSm.json",
 	IsMobile = UserInputService.TouchEnabled and not UserInputService.KeyboardEnabled,
 	ThemeName = "Orca",
+	_pending = {},
 }
 
 local function rgb(r, g, b) return Color3.fromRGB(r, g, b) end
@@ -64,9 +65,33 @@ OrcaHub.Themes = {
 		Accent = rgb(244, 63, 94), Accent2 = rgb(251, 146, 60),
 		ToggleOff = rgb(51, 38, 42), Knob = rgb(252, 247, 248),
 	},
+	Midnight = {
+		Background = rgb(10, 10, 11), Sidebar = rgb(14, 14, 16), Section = rgb(18, 18, 21),
+		Element = rgb(26, 26, 30), ElementHover = rgb(34, 34, 39),
+		Stroke = rgb(36, 36, 41), StrokeLight = rgb(52, 52, 59),
+		Text = rgb(240, 240, 243), SubText = rgb(155, 155, 165), DimText = rgb(98, 98, 108),
+		Accent = rgb(229, 229, 234), Accent2 = rgb(160, 160, 172),
+		ToggleOff = rgb(40, 40, 46), Knob = rgb(250, 250, 252),
+	},
+	Sakura = {
+		Background = rgb(15, 10, 14), Sidebar = rgb(20, 13, 19), Section = rgb(25, 16, 23),
+		Element = rgb(35, 23, 32), ElementHover = rgb(45, 30, 41),
+		Stroke = rgb(48, 32, 44), StrokeLight = rgb(68, 46, 62),
+		Text = rgb(250, 238, 246), SubText = rgb(186, 152, 175), DimText = rgb(122, 92, 112),
+		Accent = rgb(244, 114, 182), Accent2 = rgb(192, 132, 252),
+		ToggleOff = rgb(54, 37, 50), Knob = rgb(253, 246, 251),
+	},
+	Light = {
+		Background = rgb(244, 245, 248), Sidebar = rgb(235, 237, 242), Section = rgb(255, 255, 255),
+		Element = rgb(239, 241, 245), ElementHover = rgb(228, 231, 237),
+		Stroke = rgb(221, 224, 231), StrokeLight = rgb(205, 209, 218),
+		Text = rgb(20, 24, 32), SubText = rgb(82, 90, 104), DimText = rgb(138, 145, 158),
+		Accent = rgb(37, 99, 235), Accent2 = rgb(14, 165, 233),
+		ToggleOff = rgb(208, 212, 221), Knob = rgb(255, 255, 255),
+	},
 }
 
-OrcaHub.Theme = {}
+OrcaHub.Theme = { MainTransparency = 0, SidebarTransparency = 0, PanelTransparency = 0 }
 for k, v in pairs(OrcaHub.Themes.Orca) do OrcaHub.Theme[k] = v end
 local function T() return OrcaHub.Theme end
 
@@ -183,8 +208,43 @@ local function create(class, props, children)
 	return inst
 end
 
+local Corners = setmetatable({}, { __mode = "k" })
+OrcaHub.CornerScale = 1
+
+local function scaledRadius(r)
+	if r >= 100 then return r end
+	return math.floor(r * OrcaHub.CornerScale + 0.5)
+end
+
 local function corner(r)
-	return create("UICorner", { CornerRadius = UDim.new(0, r or 8) })
+	r = r or 8
+	local c = create("UICorner", { CornerRadius = UDim.new(0, scaledRadius(r)) })
+	Corners[c] = r
+	return c
+end
+
+OrcaHub.Styles = {
+	Default = { Corners = 1, Glass = false },
+	Glass = { Corners = 1, Glass = true },
+	Sharp = { Corners = 0.35, Glass = false },
+	Soft = { Corners = 1.45, Glass = false },
+}
+OrcaHub.StyleName = "Default"
+
+function OrcaHub:SetStyle(name)
+	local style = self.Styles[name]
+	if not style then return end
+	self.StyleName = name
+	self.CornerScale = style.Corners
+	for c, r in pairs(Corners) do
+		if c.Parent then c.CornerRadius = UDim.new(0, scaledRadius(r)) end
+	end
+	self:SetTheme({
+		MainTransparency = style.Glass and 0.12 or 0,
+		SidebarTransparency = style.Glass and 0.3 or 0,
+		PanelTransparency = style.Glass and 0.22 or 0,
+	})
+	if self.Window and self.Window._updateBlur then self.Window:_updateBlur() end
 end
 
 local function stroke(key, thickness)
@@ -415,7 +475,11 @@ function OrcaHub:_applyConfig(data)
 	if type(data) ~= "table" then return false end
 	for flag, value in pairs(data) do
 		local option = self.Options[flag]
-		if option and option.Set then pcall(function() option:Set(deserialize(value)) end) end
+		if option and option.Set then
+			pcall(function() option:Set(deserialize(value)) end)
+		else
+			self._pending[flag] = value
+		end
 	end
 	return true
 end
@@ -888,7 +952,7 @@ function OrcaHub:CreateWindow(opts)
 
 	local main = create("Frame", {
 		Parent = holder, Size = UDim2.fromScale(1, 1), ClipsDescendants = true,
-		Theme = { BackgroundColor3 = "Background" },
+		Theme = { BackgroundColor3 = "Background", BackgroundTransparency = "MainTransparency" },
 	}, { corner(12) })
 	local mainStroke = create("UIStroke", {
 		Parent = main, ApplyStrokeMode = Enum.ApplyStrokeMode.Border, Color = Color3.new(1, 1, 1),
@@ -974,12 +1038,12 @@ function OrcaHub:CreateWindow(opts)
 	local sidebarW = Window.Compact and SIDEBAR_COMPACT or SIDEBAR_W
 	local sidebar = create("Frame", {
 		Parent = main, Size = UDim2.new(0, sidebarW, 1, 0), ClipsDescendants = true,
-		Theme = { BackgroundColor3 = "Sidebar" },
+		Theme = { BackgroundColor3 = "Sidebar", BackgroundTransparency = "SidebarTransparency" },
 	}, { corner(12) })
 	local sideFiller = create("Frame", {
 		Parent = sidebar, BorderSizePixel = 0, AnchorPoint = Vector2.new(1, 0),
 		Position = UDim2.fromScale(1, 0), Size = UDim2.new(0, 12, 1, 0),
-		Theme = { BackgroundColor3 = "Sidebar" },
+		Theme = { BackgroundColor3 = "Sidebar", BackgroundTransparency = function(t) return t.SidebarTransparency > 0 and 1 or 0 end },
 	})
 	local sideLine = create("Frame", {
 		Parent = sidebar, BorderSizePixel = 0, AnchorPoint = Vector2.new(1, 0), ZIndex = 3,
@@ -1032,6 +1096,8 @@ function OrcaHub:CreateWindow(opts)
 		CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
 	}, { tabLayout, padding(8, 8, 8, 8) })
 	local fadeLabels = { brandTitle, brandSub }
+	function Window:SetTitle(t) brandTitle.Text = t end
+	function Window:SetSubtitle(t) brandSub.Text = t end
 
 	local profile
 	if profileH > 0 then
@@ -1163,6 +1229,13 @@ function OrcaHub:CreateWindow(opts)
 		layoutSearch(true)
 		searchBox:CaptureFocus()
 	end)
+	function Window:_focusSearch()
+		if searchCollapsed then
+			searchExpanded = true
+			layoutSearch(true)
+		end
+		searchBox:CaptureFocus()
+	end
 	searchBox.FocusLost:Connect(function()
 		if searchCollapsed and searchBox.Text == "" then
 			searchExpanded = false
@@ -1488,9 +1561,30 @@ function OrcaHub:CreateWindow(opts)
 		end
 		fab.Visible = fabAlways or not v
 		tween(fabIcon, { Rotation = v and 0 or 180 }, 0.35)
+		self:_updateBlur()
 	end
 
 	function Window:Toggle() self:SetVisible(not self.Visible) end
+
+	-- Glass style blurs the game behind the window while it is open
+	function Window:_updateBlur()
+		local want = OrcaHub.Styles[OrcaHub.StyleName].Glass and self.Visible and not self.Destroyed
+		if want and not self._blur then
+			pcall(function()
+				self._blur = Instance.new("BlurEffect")
+				self._blur.Size = 0
+				self._blur.Parent = Service("Lighting")
+				tween(self._blur, { Size = 14 }, 0.3)
+			end)
+		elseif not want and self._blur then
+			local b = self._blur
+			self._blur = nil
+			pcall(function()
+				tween(b, { Size = 0 }, 0.2)
+				task.delay(0.21, function() b:Destroy() end)
+			end)
+		end
+	end
 	function Window:SetToggleKey(key) self.ToggleKey = key end
 	function Window:SetToggleButtonVisible(v)
 		fabAlways = v
@@ -1504,6 +1598,11 @@ function OrcaHub:CreateWindow(opts)
 			return
 		end
 		if processed or input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+		if input.KeyCode == Enum.KeyCode.F and Window.Visible
+			and (UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService:IsKeyDown(Enum.KeyCode.RightControl)) then
+			Window:_focusSearch()
+			return
+		end
 		if input.KeyCode == Window.ToggleKey then Window:Toggle() end
 		for _, kb in ipairs(Window.Keybinds) do
 			if kb.Key ~= Enum.KeyCode.Unknown and input.KeyCode == kb.Key then kb.Pressed() end
@@ -1729,6 +1828,7 @@ function OrcaHub:CreateWindow(opts)
 			data[c.Key] = entry
 		end
 		data.__window = self.SavedLayout.__window
+		data.__favorites = self.SavedLayout.__favorites
 		self.SavedLayout = data
 		writeJSON(self.LayoutPath, data)
 	end
@@ -1753,6 +1853,9 @@ function OrcaHub:CreateWindow(opts)
 	local function applySearch()
 		local q = string.lower((string.gsub(searchBox.Text, "^%s+", "")))
 		q = string.gsub(q, "%s+$", "")
+		if q ~= "" then
+			for _, tab in ipairs(Window.Tabs) do tab:_ensureBuilt() end
+		end
 		Window._searching = q ~= ""
 		Window:_closePopup()
 		for _, tab in ipairs(Window.Tabs) do
@@ -1782,6 +1885,200 @@ function OrcaHub:CreateWindow(opts)
 		end
 	end
 	searchBox:GetPropertyChangedSignal("Text"):Connect(applySearch)
+
+	---------------------------------------------------------------- favourites and the option menu
+
+	Window.FavKeys = {}
+	if type(Window.SavedLayout.__favorites) == "table" then
+		for _, k in ipairs(Window.SavedLayout.__favorites) do table.insert(Window.FavKeys, k) end
+	end
+	Window.Elements = {}
+	local favTab, favSection
+	local favMirrors = {}
+
+	local function isFav(key) return table.find(Window.FavKeys, key) ~= nil end
+
+	-- a long-press opens the option menu; the touch release that follows must not also click
+	local function suppressed() return os.clock() - (Window._longPressAt or -1) < 0.6 end
+	Window._suppressed = suppressed
+
+	function Window:_jumpTo(obj)
+		local C = obj._container
+		if not C then return end
+		if C.Tab then C.Tab:Select() end
+		if C.Sub then C.Sub:Select() end
+		local section = obj.Section
+		if section and section.Collapsed then section:SetCollapsed(false) end
+		task.delay(0.45, function()
+			if section and section._targetY then
+				local maxScroll = math.max(0, C.Page.AbsoluteCanvasSize.Y - C.Page.AbsoluteWindowSize.Y) / self.Scale
+				C.Page.CanvasPosition = Vector2.new(0, math.clamp(section._targetY - PAD, 0, maxScroll))
+			end
+			if obj.Row and obj.Row.Parent then
+				local flash = create("Frame", {
+					Parent = obj.Row, ZIndex = 0, Position = UDim2.fromOffset(-6, -2), Size = UDim2.new(1, 12, 1, 4),
+					BackgroundTransparency = 0.6, Theme = { BackgroundColor3 = "Accent" },
+				}, { corner(6) })
+				tween(flash, { BackgroundTransparency = 1 }, 1.2)
+				task.delay(1.25, function() flash:Destroy() end)
+			end
+		end)
+	end
+
+	function Window:_queueFavourites()
+		if self._favQueued then return end
+		self._favQueued = true
+		task.defer(function()
+			self._favQueued = false
+			self:_renderFavourites()
+		end)
+	end
+
+	function Window:_renderFavourites()
+		for _, m in ipairs(favMirrors) do pcall(function() m:Destroy() end) end
+		favMirrors = {}
+		for _, obj in pairs(self.Elements) do obj._mirrors = {} end
+		for _, key in ipairs(self.FavKeys) do
+			for _, tab in ipairs(self.Tabs) do
+				if not tab.Built and string.sub(key, 1, #tab.Name + 1) == tab.Name .. "/" then tab:_ensureBuilt() end
+			end
+		end
+		local any = false
+		for _, key in ipairs(self.FavKeys) do
+			if self.Elements[key] then any = true end
+		end
+		if not any then
+			if favTab then favTab:SetHidden(true) end
+			return
+		end
+		if not favTab then
+			favTab = self:Tab({ Name = "Favourites", Icon = "star", Description = "Right-click or long-press any option to star it", _order = -1 })
+			favSection = favTab:Section({ Name = "Starred", Icon = "star", Collapsed = false })
+		end
+		favTab:SetHidden(false)
+		for _, key in ipairs(self.FavKeys) do
+			local obj = self.Elements[key]
+			if obj then
+				local o = obj._opts
+				local base = { Name = obj.Name, Tooltip = o.Tooltip, _mirrorOf = obj }
+				local m
+				if obj.Type == "Toggle" then
+					base.Default, base.Style = obj:Get(), o.Style
+					base.Callback = function(v) obj:Set(v) end
+					m = favSection:Toggle(base)
+				elseif obj.Type == "Slider" then
+					for _, k in ipairs({ "Min", "Max", "Increment", "Rounding", "Suffix" }) do base[k] = o[k] end
+					base.Default = obj:Get()
+					base.Callback = function(v) obj:Set(v) end
+					m = favSection:Slider(base)
+				elseif obj.Type == "Segmented" then
+					base.Options, base.Default = o.Options, obj:Get()
+					base.Callback = function(v) obj:Set(v) end
+					m = favSection:Segmented(base)
+				elseif obj.Type == "Button" then
+					base.Icon, base.Style, base.Confirm = o.Icon, o.Style, o.Confirm
+					base.Callback = function() obj:Fire() end
+					m = favSection:Button(base)
+				else
+					base.Icon = "arrow-right"
+					base.Callback = function() self:_jumpTo(obj) end
+					m = favSection:Button(base)
+				end
+				table.insert(obj._mirrors, m)
+				table.insert(favMirrors, m)
+			end
+		end
+	end
+
+	function Window:ToggleFavourite(obj)
+		obj = obj._mirrorOf or obj
+		local key = obj._key
+		if not key then return end
+		local i = table.find(self.FavKeys, key)
+		if i then table.remove(self.FavKeys, i) else table.insert(self.FavKeys, key) end
+		if obj._star then obj._star.Visible = not i end
+		self.SavedLayout.__favorites = self.FavKeys
+		self:SaveLayout()
+		self:_renderFavourites()
+		OrcaHub:Notify({ Title = i and "Removed from favourites" or "Added to favourites", Content = obj.Name, Duration = 2 })
+	end
+
+	function Window:_contextMenu(obj, screenPos)
+		local target = obj._mirrorOf or obj
+		local items = {}
+		if target._key and (target.Set or target.Fire) then
+			table.insert(items, {
+				Title = isFav(target._key) and "Remove from favourites" or "Add to favourites", Icon = "star",
+				Callback = function() self:ToggleFavourite(target) end,
+			})
+		end
+		if target._default ~= nil and target.Set and target.Type ~= "Keybind" then
+			table.insert(items, { Title = "Reset to default", Icon = "rotate-ccw", Callback = function() target:Set(target._default) end })
+		end
+		if obj._mirrorOf then
+			table.insert(items, { Title = "Go to option", Icon = "arrow-right", Callback = function() self:_jumpTo(target) end })
+		end
+		if #items == 0 then return end
+		local pos = self:_toMain(screenPos)
+		local W, H = 200, #items * 32 + 8
+		local mainW, mainH = main.AbsoluteSize.X / self.Scale, main.AbsoluteSize.Y / self.Scale
+		local frame = create("Frame", {
+			Parent = overlay, ZIndex = 3,
+			Position = UDim2.fromOffset(math.clamp(pos.X, 8, mainW - W - 8), math.clamp(pos.Y, 8, mainH - H - 8)),
+			Size = UDim2.fromOffset(W, H), Theme = { BackgroundColor3 = "Section" },
+		}, { corner(8), stroke("StrokeLight"), padding(4, 4, 4, 4) })
+		local sc = create("UIScale", { Parent = frame, Scale = 0.9 })
+		tween(sc, { Scale = 1 }, 0.25, Enum.EasingStyle.Back)
+		create("UIListLayout", { Parent = frame, SortOrder = Enum.SortOrder.LayoutOrder })
+		for i, it in ipairs(items) do
+			local b = create("TextButton", {
+				Parent = frame, Text = "", AutoButtonColor = false, BackgroundTransparency = 1, LayoutOrder = i,
+				Size = UDim2.new(1, 0, 0, 32), Theme = { BackgroundColor3 = "ElementHover" },
+			}, { corner(6) })
+			Icon(it.Icon, 14, "Accent", { Parent = b, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 10, 0.5, 0) })
+			text({ Parent = b, Text = it.Title, TextSize = 12, Position = UDim2.fromOffset(32, 0), Size = UDim2.new(1, -36, 1, 0) })
+			b.MouseEnter:Connect(function() tween(b, { BackgroundTransparency = 0 }, 0.12) end)
+			b.MouseLeave:Connect(function() tween(b, { BackgroundTransparency = 1 }, 0.15) end)
+			b.MouseButton1Click:Connect(function()
+				self:_closePopup()
+				safeCall(it.Callback)
+			end)
+		end
+		self:_openPopup({ Close = function() frame:Destroy() end })
+	end
+
+	local function attachContext(row, obj)
+		local function hook(gui)
+			gui.InputBegan:Connect(function(input)
+				if input.UserInputType == Enum.UserInputType.MouseButton2 then
+					if os.clock() - (obj._menuAt or -1) < 0.1 then return end
+					obj._menuAt = os.clock()
+					Window:_contextMenu(obj, vec2(input.Position))
+				elseif input.UserInputType == Enum.UserInputType.Touch then
+					local start = vec2(input.Position)
+					local state = "pending"
+					local cancel = Pointer.track(input, function(p)
+						if (p - start).Magnitude > 10 then state = "moved" end
+					end, function()
+						if state == "pending" then state = "tap" end
+					end)
+					task.delay(0.55, function()
+						if state == "pending" and os.clock() - (obj._menuAt or -1) > 0.1 then
+							state = "long"
+							cancel()
+							obj._menuAt = os.clock()
+							Window._longPressAt = os.clock()
+							Window:_contextMenu(obj, start)
+						end
+					end)
+				end
+			end)
+		end
+		hook(row)
+		for _, d in ipairs(row:GetDescendants()) do
+			if d:IsA("GuiButton") then hook(d) end
+		end
+	end
 
 	---------------------------------------------------------------- containers (a page of draggable sections)
 
@@ -1982,7 +2279,7 @@ function OrcaHub:CreateWindow(opts)
 			local frame = create("Frame", {
 				Parent = page, ClipsDescendants = true,
 				Size = UDim2.fromOffset(300, SECTION_HEADER), Position = UDim2.fromOffset(PAD, PAD),
-				Theme = { BackgroundColor3 = "Section" },
+				Theme = { BackgroundColor3 = "Section", BackgroundTransparency = "PanelTransparency" },
 			}, { corner(10) })
 			Section.Frame = frame
 			Section._stroke = stroke("Stroke")
@@ -1993,7 +2290,7 @@ function OrcaHub:CreateWindow(opts)
 				Parent = frame, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, SECTION_HEADER),
 				Theme = { BackgroundColor3 = "ElementHover" },
 			})
-			Section.Header = header
+			Section.HeaderFrame = header
 			local grip = Icon("grip-vertical", 14, "DimText", {
 				Parent = header, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 8, 0.5, 0),
 				ImageTransparency = MOBILE and 0.4 or 0.6,
@@ -2003,11 +2300,12 @@ function OrcaHub:CreateWindow(opts)
 				Icon(so.Icon, 15, "Accent", { Parent = header, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 26, 0.5, 0) })
 				titleX = 48
 			end
-			text({
+			local sectionTitle = text({
 				Parent = header, Text = Section.Name, Weight = "SemiBold", TextSize = 13,
 				Position = UDim2.fromOffset(titleX, 0), Size = UDim2.new(1, -titleX - 74, 1, 0),
 				TextTruncate = Enum.TextTruncate.AtEnd,
 			})
+			function Section:SetTitle(t) sectionTitle.Text = t end
 			local countBadge = text({
 				Parent = header, Text = "", TextSize = 11, Weight = "Medium", TextXAlignment = Enum.TextXAlignment.Center,
 				AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -36, 0.5, 0), Size = UDim2.fromOffset(0, 18),
@@ -2172,6 +2470,7 @@ function OrcaHub:CreateWindow(opts)
 				hit.MouseLeave:Connect(function() tween(glow, { BackgroundTransparency = 1 }, 0.2) end)
 			end
 
+			local lastLine
 			local function titleBlock(parent, name, desc, rightInset, top, tooltip)
 				local holderFrame = create("Frame", {
 					Parent = parent, BackgroundTransparency = 1,
@@ -2188,6 +2487,7 @@ function OrcaHub:CreateWindow(opts)
 						SortOrder = Enum.SortOrder.LayoutOrder, Padding = UDim.new(0, 5),
 					}),
 				})
+				lastLine = line
 				local title = text({
 					Parent = line, Text = name, Size = UDim2.fromOffset(0, 16), AutomaticSize = Enum.AutomaticSize.X, LayoutOrder = 1,
 					Theme = false, TextColor3 = T().SubText, TextTruncate = Enum.TextTruncate.AtEnd,
@@ -2273,6 +2573,46 @@ function OrcaHub:CreateWindow(opts)
 				table.insert(Section.Elements, obj)
 				if o.Flag then OrcaHub.Options[o.Flag] = obj end
 				if o.Locked then obj:Lock(type(o.Locked) == "string" and o.Locked or nil) end
+
+				obj._opts = o
+				obj._container = C
+				obj._mirrors = {}
+				obj._mirrorOf = o._mirrorOf
+				obj._key = C.Key .. "/" .. Section.Name .. "/" .. obj.Name
+				if obj.Get then
+					local ok, d = pcall(function() return obj:Get() end)
+					if ok then obj._default = type(d) == "table" and table.clone(d) or d end
+				end
+				local displayOnly = { Label = true, Paragraph = true, Header = true, Progress = true, Divider = true, Value = true, Code = true, Image = true, Buttons = true }
+				local interactive = (obj.Set ~= nil or obj.Fire ~= nil) and not displayOnly[kind]
+				if interactive and not o._mirrorOf then
+					Window.Elements[obj._key] = obj
+					if lastLine and lastLine:IsDescendantOf(row) then
+						obj._star = Icon("star", 11, "Accent", { Parent = lastLine, LayoutOrder = 3, Visible = isFav(obj._key) })
+					end
+					if isFav(obj._key) then Window:_queueFavourites() end
+				end
+				lastLine = nil
+				if obj.Set and interactive then
+					local rawSet = obj.Set
+					obj.Set = function(self, ...)
+						rawSet(self, ...)
+						for _, m in ipairs(obj._mirrors) do
+							if m.Set and obj.Get then pcall(function() m:Set(obj:Get(), true) end) end
+						end
+					end
+				end
+				local rawDestroy = obj.Destroy
+				obj.Destroy = function(self)
+					if Window.Elements[obj._key] == obj then Window.Elements[obj._key] = nil end
+					rawDestroy(self)
+				end
+				if interactive or o._mirrorOf then attachContext(row, obj) end
+				if o.Flag and OrcaHub._pending[o.Flag] ~= nil and obj.Set then
+					local value = OrcaHub._pending[o.Flag]
+					OrcaHub._pending[o.Flag] = nil
+					task.defer(function() pcall(function() obj:Set(deserialize(value)) end) end)
+				end
 				refreshBadge()
 				return obj
 			end
@@ -2622,6 +2962,396 @@ function OrcaHub:CreateWindow(opts)
 				return register("Progress", o, row, obj)
 			end
 
+			------------------------------------------------ simple display elements
+
+			function Section:Header(t)
+				local row = newRow(24)
+				local lbl = text({
+					Parent = row, Text = string.upper(tostring(t or "")), TextSize = 11, Weight = "Bold",
+					Position = UDim2.fromOffset(0, 4), Size = UDim2.new(0, 0, 1, -4), AutomaticSize = Enum.AutomaticSize.X,
+					Theme = { TextColor3 = "Accent" },
+				})
+				local line = create("Frame", {
+					Parent = row, BorderSizePixel = 0, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 2),
+					Size = UDim2.new(1, -8, 0, 1), Theme = { BackgroundColor3 = "Stroke" },
+				})
+				local function fit() line.Size = UDim2.new(1, -(lbl.AbsoluteSize.X / Window.Scale + 10), 0, 1) end
+				lbl:GetPropertyChangedSignal("AbsoluteSize"):Connect(fit)
+				fit()
+				return register("Header", { Name = tostring(t or "") }, row, { Set = function(_, v) lbl.Text = string.upper(tostring(v)) end })
+			end
+
+			function Section:Space(h)
+				return register("Divider", { Name = "" }, newRow(h or 8), {})
+			end
+
+			function Section:Value(o)
+				if type(o) == "string" then o = { Name = o } end
+				local row = newRow(26)
+				text({ Parent = row, Text = o.Name or "", Size = UDim2.new(0.55, 0, 1, 0), Theme = { TextColor3 = "SubText" }, TextTruncate = Enum.TextTruncate.AtEnd })
+				local v = text({
+					Parent = row, Text = tostring(o.Value or ""), Weight = "Medium", TextXAlignment = Enum.TextXAlignment.Right, RichText = true,
+					AnchorPoint = Vector2.new(1, 0), Position = UDim2.fromScale(1, 0), Size = UDim2.new(0.45, 0, 1, 0), TextTruncate = Enum.TextTruncate.AtEnd,
+				})
+				local value = o.Value
+				local obj = {}
+				function obj:SetValue(x)
+					value = x
+					v.Text = tostring(x)
+				end
+				function obj:GetValue() return value end
+				return register("Value", o, row, obj)
+			end
+
+			function Section:Code(o)
+				if type(o) == "string" then o = { Text = o } end
+				local row = newRow(0)
+				row.AutomaticSize = Enum.AutomaticSize.Y
+				local box = create("Frame", {
+					Parent = row, Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+					Theme = { BackgroundColor3 = "Sidebar" },
+				}, { corner(8), stroke("Stroke"), padding(9, 38, 9, 10) })
+				local lbl = text({
+					Parent = box, Text = o.Text or "", TextSize = 12, TextWrapped = true,
+					Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, Theme = { TextColor3 = "Text" },
+				})
+				pcall(function() lbl.Font = Enum.Font.RobotoMono end)
+				local copy = create("TextButton", {
+					Parent = row, Text = "", AutoButtonColor = false, ZIndex = 2, AnchorPoint = Vector2.new(1, 0),
+					Position = UDim2.new(1, -6, 0, 6), Size = UDim2.fromOffset(24, 24), Theme = { BackgroundColor3 = "Element" },
+				}, { corner(6) })
+				local copyIcon = Icon("copy", 13, "DimText", { Parent = copy, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5) })
+				copy.MouseButton1Click:Connect(function()
+					local ok = pcall(function() setclipboard(lbl.Text) end)
+					tween(copyIcon, { ImageColor3 = ok and T().Accent or rgb(248, 113, 113) }, 0.15)
+					task.delay(0.8, function() tween(copyIcon, { ImageColor3 = T().DimText }, 0.3) end)
+				end)
+				return register("Code", { Name = o.Name or o.Text or "" }, row, { SetText = function(_, t) lbl.Text = t end })
+			end
+
+			function Section:Image(o)
+				if type(o) ~= "table" then o = { Image = o } end
+				local h = o.Height or 120
+				local row = newRow(h + (o.Caption and 20 or 0))
+				local img = create("ImageLabel", {
+					Parent = row, Size = UDim2.new(1, 0, 0, h), Image = iconImage(o.Image) or tostring(o.Image or ""),
+					ScaleType = o.ScaleType or Enum.ScaleType.Crop, Theme = { BackgroundColor3 = "Element" },
+				}, { corner(8), stroke("Stroke") })
+				if o.Caption then
+					text({
+						Parent = row, Text = o.Caption, TextSize = 11, TextXAlignment = Enum.TextXAlignment.Center,
+						Position = UDim2.fromOffset(0, h + 4), Size = UDim2.new(1, 0, 0, 14), Theme = { TextColor3 = "DimText" },
+					})
+				end
+				return register("Image", { Name = o.Caption or "" }, row, {
+					SetImage = function(_, i) img.Image = iconImage(i) or tostring(i) end,
+				})
+			end
+
+			------------------------------------------------ button row
+
+			function Section:Buttons(list)
+				local row = newRow(BOX_H + 2)
+				create("UIListLayout", {
+					Parent = row, FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6),
+					SortOrder = Enum.SortOrder.LayoutOrder,
+				})
+				local n = #list
+				local names = {}
+				for i, bo in ipairs(list) do
+					table.insert(names, bo.Name or "Button")
+					local primary = bo.Style == "Primary"
+					local b = create("TextButton", {
+						Parent = row, Text = "", AutoButtonColor = false, LayoutOrder = i, ClipsDescendants = true,
+						Size = UDim2.new(1 / n, -(6 * (n - 1)) / n, 1, 0), BackgroundColor3 = Color3.new(1, 1, 1),
+						Theme = (not primary) and { BackgroundColor3 = "Element" } or nil,
+					}, { corner(8) })
+					if primary then accentGradient(0).Parent = b else stroke("Stroke").Parent = b end
+					local sc = create("UIScale", { Parent = b })
+					local inner = create("Frame", { Parent = b, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1) }, {
+						create("UIListLayout", {
+							FillDirection = Enum.FillDirection.Horizontal, HorizontalAlignment = Enum.HorizontalAlignment.Center,
+							VerticalAlignment = Enum.VerticalAlignment.Center, Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder,
+						}),
+					})
+					if bo.Icon and iconImage(bo.Icon) then
+						local ic = Icon(bo.Icon, 14, (not primary) and "SubText" or nil, { Parent = inner, LayoutOrder = 1 })
+						if primary then ic.ImageColor3 = Color3.new(1, 1, 1) end
+					end
+					text({
+						Parent = inner, Text = bo.Name or "Button", Weight = "Medium", TextSize = 12, LayoutOrder = 2,
+						Size = UDim2.fromOffset(0, 16), AutomaticSize = Enum.AutomaticSize.X, TextTruncate = Enum.TextTruncate.AtEnd,
+						Theme = (not primary) and { TextColor3 = "Text" } or false, TextColor3 = Color3.new(1, 1, 1),
+					})
+					b.MouseEnter:Connect(function()
+						if primary then tween(b, { BackgroundTransparency = 0.12 }) else tween(b, { BackgroundColor3 = T().ElementHover }) end
+					end)
+					b.MouseLeave:Connect(function()
+						if primary then tween(b, { BackgroundTransparency = 0 }) else tween(b, { BackgroundColor3 = T().Element }) end
+						tween(sc, { Scale = 1 }, 0.2)
+					end)
+					b.MouseButton1Down:Connect(function() tween(sc, { Scale = 0.96 }, 0.1) end)
+					b.MouseButton1Up:Connect(function() tween(sc, { Scale = 1 }, 0.3, Enum.EasingStyle.Back) end)
+					b.MouseButton1Click:Connect(function()
+						if suppressed() then return end
+						if bo.Confirm then
+							Window:Dialog({
+								Title = type(bo.Confirm) == "string" and bo.Confirm or ("Run \"" .. (bo.Name or "this") .. "\"?"),
+								Buttons = { { Title = "Cancel" }, { Title = "Confirm", Primary = true, Callback = bo.Callback } },
+							})
+						else
+							safeCall(bo.Callback)
+						end
+					end)
+				end
+				return register("Buttons", { Name = table.concat(names, " ") }, row, {})
+			end
+
+			------------------------------------------------ radio group
+
+			function Section:Radio(o)
+				local options = o.Options or {}
+				local value = o.Default
+				local row = newRow(0)
+				row.AutomaticSize = Enum.AutomaticSize.Y
+				create("UIListLayout", { Parent = row, Padding = UDim.new(0, 2), SortOrder = Enum.SortOrder.LayoutOrder })
+				if o.Name then
+					local head = create("Frame", { Parent = row, BackgroundTransparency = 1, Size = UDim2.new(1, 0, 0, 20), LayoutOrder = 0 })
+					titleBlock(head, o.Name, nil, 0, 2, o.Tooltip)
+				end
+				local items = {}
+				local obj = {}
+				local function render(animate)
+					for _, it in ipairs(items) do
+						local on = it.Value == value
+						set(it.Dot, { BackgroundTransparency = on and 0 or 1 }, animate, 0.2)
+						set(it.DotScale, { Scale = on and 1 or 0.3 }, animate, 0.3, Enum.EasingStyle.Back)
+						set(it.Label, { TextColor3 = on and T().Text or T().SubText }, animate, 0.2)
+					end
+				end
+				for i, opt in ipairs(options) do
+					local b = create("TextButton", {
+						Parent = row, Text = "", AutoButtonColor = false, BackgroundTransparency = 1, LayoutOrder = i,
+						Size = UDim2.new(1, 0, 0, MOBILE and 30 or 26),
+					})
+					local ring = create("Frame", {
+						Parent = b, BackgroundTransparency = 1, AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
+						Size = UDim2.fromOffset(16, 16),
+					}, { corner(8), stroke("StrokeLight", 1.5) })
+					local dot = create("Frame", {
+						Parent = ring, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+						Size = UDim2.fromOffset(8, 8), BackgroundColor3 = Color3.new(1, 1, 1), BackgroundTransparency = 1,
+					}, { corner(4), accentGradient(45) })
+					local dotScale = create("UIScale", { Parent = dot, Scale = 0.3 })
+					local l = text({
+						Parent = b, Text = tostring(opt), Position = UDim2.fromOffset(26, 0), Size = UDim2.new(1, -26, 1, 0),
+						Theme = false, TextColor3 = T().SubText,
+					})
+					table.insert(items, { Value = opt, Dot = dot, DotScale = dotScale, Label = l })
+					b.MouseButton1Click:Connect(function()
+						if suppressed() then return end
+						obj:Set(opt)
+					end)
+				end
+				function obj:Set(v, silent)
+					value = v
+					render(true)
+					if o.Flag then OrcaHub.Flags[o.Flag] = value end
+					if not silent then safeCall(o.Callback, value) end
+				end
+				function obj:Get() return value end
+				table.insert(Refreshers, function() render(false) end)
+				render(false)
+				if o.Flag then OrcaHub.Flags[o.Flag] = value end
+				return register("Radio", o, row, obj)
+			end
+
+			------------------------------------------------ number input with - / + buttons
+
+			function Section:Number(o)
+				local min, max = o.Min or -math.huge, o.Max or math.huge
+				local step = o.Step or o.Increment or 1
+				local suffix = o.Suffix or ""
+				local decimals = 0
+				local dot = string.find(tostring(step), ".", 1, true)
+				if dot then decimals = #tostring(step) - dot end
+				local value = math.clamp(o.Default or (min > -math.huge and min or 0), min, max)
+				local row = newRow(ROW_H)
+				local title = titleBlock(row, o.Name or "Number", nil, 124, nil, o.Tooltip)
+				local box = create("Frame", {
+					Parent = row, AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0), Size = UDim2.fromOffset(116, 26),
+					Theme = { BackgroundColor3 = "Element" },
+				}, { corner(7), stroke("Stroke") })
+				local function stepButton(iconName, anchorX)
+					local b = create("TextButton", {
+						Parent = box, Text = "", AutoButtonColor = false, BackgroundTransparency = 1,
+						AnchorPoint = Vector2.new(anchorX, 0.5), Position = UDim2.new(anchorX, 0, 0.5, 0), Size = UDim2.fromOffset(28, 26),
+						Theme = { BackgroundColor3 = "ElementHover" },
+					}, { corner(7) })
+					local ic = Icon(iconName, 13, "SubText", { Parent = b, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5) })
+					b.MouseEnter:Connect(function()
+						tween(b, { BackgroundTransparency = 0 }, 0.12)
+						tween(ic, { ImageColor3 = T().Accent }, 0.12)
+					end)
+					b.MouseLeave:Connect(function()
+						tween(b, { BackgroundTransparency = 1 }, 0.15)
+						tween(ic, { ImageColor3 = T().SubText }, 0.15)
+					end)
+					return b
+				end
+				local minus = stepButton("minus", 0)
+				local plus = stepButton("plus", 1)
+				local input = text({
+					Class = "TextBox", Parent = box, Text = "", TextSize = 12, ClearTextOnFocus = false, Weight = "Medium",
+					TextXAlignment = Enum.TextXAlignment.Center, Position = UDim2.fromOffset(28, 0), Size = UDim2.new(1, -56, 1, 0),
+				})
+				local function format(n) return string.format("%." .. decimals .. "f", n) end
+				local obj = {}
+				function obj:Set(v, silent)
+					v = tonumber(v) or value
+					v = math.clamp(v, min, max)
+					v = tonumber(format(math.floor(v / step + 0.5) * step))
+					v = math.clamp(v, min, max)
+					local changed = v ~= value
+					value = v
+					input.Text = format(v) .. suffix
+					if o.Flag then OrcaHub.Flags[o.Flag] = value end
+					if changed and not silent then safeCall(o.Callback, value) end
+				end
+				function obj:Get() return value end
+				minus.MouseButton1Click:Connect(function() obj:Set(value - step) end)
+				plus.MouseButton1Click:Connect(function() obj:Set(value + step) end)
+				input.FocusLost:Connect(function()
+					obj:Set(tonumber((string.gsub(input.Text, "[^%d%.%-]", ""))) or value)
+				end)
+				obj:Set(value, true)
+				if o.Flag then OrcaHub.Flags[o.Flag] = value end
+				return register("Number", o, row, obj)
+			end
+
+			------------------------------------------------ range slider (two handles)
+
+			function Section:Range(o)
+				local min, max = o.Min or 0, o.Max or 100
+				local inc = o.Increment or 1
+				local suffix = o.Suffix or ""
+				local decimals = 0
+				local dot = string.find(tostring(inc), ".", 1, true)
+				if dot then decimals = #tostring(inc) - dot end
+				local lo = (o.Default and o.Default[1]) or min
+				local hi = (o.Default and o.Default[2]) or max
+				local row = newRow(ROW_H + 18)
+				local title = titleBlock(row, o.Name or "Range", nil, 110, 2, o.Tooltip)
+				local valueLbl = text({
+					Parent = row, Text = "", TextSize = 12, TextXAlignment = Enum.TextXAlignment.Center, BackgroundTransparency = 0,
+					AnchorPoint = Vector2.new(1, 0), Position = UDim2.new(1, 0, 0, 0), Size = UDim2.fromOffset(0, 22),
+					AutomaticSize = Enum.AutomaticSize.X, Theme = { BackgroundColor3 = "Element", TextColor3 = "Text" },
+				})
+				corner(6).Parent = valueLbl
+				padding(0, 8, 0, 8).Parent = valueLbl
+				local bar = create("Frame", {
+					Parent = row, AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, -8), Size = UDim2.new(1, 0, 0, 6),
+					Theme = { BackgroundColor3 = "ToggleOff" },
+				}, { corner(3) })
+				local fill = create("Frame", { Parent = bar, BackgroundColor3 = Color3.new(1, 1, 1), Size = UDim2.fromScale(0, 1) }, { corner(3), accentGradient(0) })
+				local function knob()
+					local k = create("Frame", {
+						Parent = bar, AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0, 0.5), Size = UDim2.fromOffset(14, 14),
+						ZIndex = 2, Theme = { BackgroundColor3 = "Knob" },
+					}, { corner(7) })
+					create("UIStroke", { Parent = k, Thickness = 2, Theme = { Color = "Accent" } })
+					return k
+				end
+				local kLo, kHi = knob(), knob()
+				local hit = create("TextButton", {
+					Parent = row, Text = "", AutoButtonColor = false, BackgroundTransparency = 1,
+					AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0), Size = UDim2.new(1, 0, 0, MOBILE and 26 or 22),
+				})
+				rowHover(row, hit)
+				hoverTitle(hit, title, function() return false end)
+				local function format(n) return string.format("%." .. decimals .. "f", n) end
+				local function snap(n)
+					n = math.floor((n - min) / inc + 0.5) * inc + min
+					return tonumber(format(math.clamp(n, min, max)))
+				end
+				local obj = {}
+				local function render()
+					local a = max == min and 0 or (lo - min) / (max - min)
+					local b = max == min and 0 or (hi - min) / (max - min)
+					kLo.Position = UDim2.fromScale(a, 0.5)
+					kHi.Position = UDim2.fromScale(b, 0.5)
+					fill.Position = UDim2.fromScale(a, 0)
+					fill.Size = UDim2.fromScale(b - a, 1)
+					valueLbl.Text = format(lo) .. suffix .. "  -  " .. format(hi) .. suffix
+				end
+				function obj:Set(v, silent)
+					if type(v) ~= "table" then return end
+					local a, b = snap(tonumber(v[1]) or lo), snap(tonumber(v[2]) or hi)
+					if a > b then a, b = b, a end
+					local changed = a ~= lo or b ~= hi
+					lo, hi = a, b
+					render()
+					if o.Flag then OrcaHub.Flags[o.Flag] = { lo, hi } end
+					if changed and not silent then safeCall(o.Callback, lo, hi) end
+				end
+				function obj:Get() return { lo, hi } end
+				hit.InputBegan:Connect(function(input)
+					if not isPress(input) then return end
+					page.ScrollingEnabled = false
+					local function valueAt(x)
+						return min + (max - min) * math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
+					end
+					local v0 = valueAt(input.Position.X)
+					local moveLow = math.abs(v0 - lo) <= math.abs(v0 - hi)
+					if lo == hi then moveLow = v0 < lo end
+					local function update(x)
+						local v = snap(valueAt(x))
+						if moveLow then obj:Set({ math.min(v, hi), hi }) else obj:Set({ lo, math.max(v, lo) }) end
+					end
+					update(input.Position.X)
+					Pointer.track(input, function(pos) update(pos.X) end, function() page.ScrollingEnabled = true end)
+				end)
+				render()
+				if o.Flag then OrcaHub.Flags[o.Flag] = { lo, hi } end
+				return register("Range", o, row, obj)
+			end
+
+			------------------------------------------------ multi-line text box
+
+			function Section:TextArea(o)
+				local lines = o.Lines or 4
+				local h = lines * 16 + 16
+				local row = newRow(h + 22)
+				titleBlock(row, o.Name or "Text", nil, 0, 0, o.Tooltip)
+				local box = create("Frame", {
+					Parent = row, AnchorPoint = Vector2.new(0, 1), Position = UDim2.fromScale(0, 1), Size = UDim2.new(1, 0, 0, h),
+					Theme = { BackgroundColor3 = "Element" },
+				}, { corner(8) })
+				local boxStroke = stroke("Stroke")
+				boxStroke.Parent = box
+				local input = text({
+					Class = "TextBox", Parent = box, Text = o.Default or "", PlaceholderText = o.Placeholder or "Type here...",
+					ClearTextOnFocus = false, MultiLine = true, TextWrapped = true, TextYAlignment = Enum.TextYAlignment.Top,
+					Position = UDim2.fromOffset(10, 8), Size = UDim2.new(1, -20, 1, -16),
+					Theme = { TextColor3 = "Text", PlaceholderColor3 = "DimText" },
+				})
+				input.Focused:Connect(function() tween(boxStroke, { Color = T().Accent }) end)
+				local obj = {}
+				function obj:Set(v, silent)
+					input.Text = tostring(v or "")
+					if o.Flag then OrcaHub.Flags[o.Flag] = input.Text end
+					if not silent then safeCall(o.Callback, input.Text) end
+				end
+				function obj:Get() return input.Text end
+				input.FocusLost:Connect(function()
+					tween(boxStroke, { Color = T().Stroke })
+					if o.Flag then OrcaHub.Flags[o.Flag] = input.Text end
+					safeCall(o.Callback, input.Text)
+				end)
+				if o.Flag then OrcaHub.Flags[o.Flag] = input.Text end
+				return register("TextArea", o, row, obj)
+			end
+
 			------------------------------------------------ button
 
 			function Section:Button(o)
@@ -2678,10 +3408,19 @@ function OrcaHub:CreateWindow(opts)
 					task.delay(0.6, function() ripple:Destroy() end)
 				end)
 				b.MouseButton1Up:Connect(function() tween(scale, { Scale = 1 }, 0.3, Enum.EasingStyle.Back) end)
-				b.MouseButton1Click:Connect(function() safeCall(o.Callback) end)
-
 				local obj = {}
 				function obj:Fire() safeCall(o.Callback) end
+				b.MouseButton1Click:Connect(function()
+					if suppressed() then return end
+					if o.Confirm then
+						Window:Dialog({
+							Title = type(o.Confirm) == "string" and o.Confirm or ("Run \"" .. (o.Name or "this") .. "\"?"),
+							Buttons = { { Title = "Cancel" }, { Title = "Confirm", Primary = true, Callback = o.Callback } },
+						})
+					else
+						safeCall(o.Callback)
+					end
+				end)
 				return register("Button", o, row, obj)
 			end
 
@@ -2775,7 +3514,10 @@ function OrcaHub:CreateWindow(opts)
 				obj.AddColorPicker = obj.AddColorpicker
 
 				hoverTitle(hit, title, function() return state end)
-				hit.MouseButton1Click:Connect(function() obj:Set(not state) end)
+				hit.MouseButton1Click:Connect(function()
+					if suppressed() then return end
+					obj:Set(not state)
+				end)
 				render(false)
 				if o.Flag then OrcaHub.Flags[o.Flag] = state end
 				return register("Toggle", o, row, obj)
@@ -3065,6 +3807,7 @@ function OrcaHub:CreateWindow(opts)
 				head.MouseEnter:Connect(function() tween(head, { BackgroundColor3 = T().ElementHover }) end)
 				head.MouseLeave:Connect(function() tween(head, { BackgroundColor3 = T().Element }) end)
 				head.MouseButton1Click:Connect(function()
+					if suppressed() then return end
 					if open then Window:_closePopup() else openList() end
 				end)
 
@@ -3124,6 +3867,30 @@ function OrcaHub:CreateWindow(opts)
 			end
 			Section.ColorPicker = Section.Colorpicker
 
+			function Section:PlayerDropdown(o)
+				o = o or {}
+				local function names()
+					local out = {}
+					for _, p in ipairs(Players:GetPlayers()) do
+						if not (o.ExcludeLocal ~= false and p == LocalPlayer) then table.insert(out, p.Name) end
+					end
+					table.sort(out)
+					return out
+				end
+				local copy = {}
+				for k, v in pairs(o) do copy[k] = v end
+				copy.Name = o.Name or "Player"
+				copy.Options = names()
+				local dd = Section:Dropdown(copy)
+				track(Players.PlayerAdded:Connect(function() dd:Refresh(names(), true) end))
+				track(Players.PlayerRemoving:Connect(function() task.defer(function() dd:Refresh(names(), true) end) end))
+				return dd
+			end
+
+			Section.Textbox = Section.Input
+			Section.TextBox = Section.Input
+			Section.TextLabel = Section.Label
+
 			return Section
 		end
 
@@ -3144,9 +3911,16 @@ function OrcaHub:CreateWindow(opts)
 
 		local btn = create("TextButton", {
 			Parent = tabList, Text = "", AutoButtonColor = false, BackgroundTransparency = 1,
-			Size = UDim2.new(1, 0, 0, TAB_H), LayoutOrder = nextOrder(),
+			Size = UDim2.new(1, 0, 0, TAB_H), LayoutOrder = o._order or nextOrder(),
 		})
 		Tab.Button = btn
+		Tab.Built = o.Build == nil
+		function Tab:_ensureBuilt()
+			if Tab.Built then return end
+			Tab.Built = true
+			local ok, err = pcall(o.Build, Tab)
+			if not ok then warn("[OrcaHub] error building tab \"" .. Tab.Name .. "\": " .. tostring(err)) end
+		end
 		local iconInst
 		if iconImage(o.Icon) then
 			iconInst = Icon(o.Icon, 18, nil, {
@@ -3190,7 +3964,32 @@ function OrcaHub:CreateWindow(opts)
 		end
 		table.insert(Refreshers, function() renderTab(Window.CurrentTab == Tab, false) end)
 
+		local customBadge = o.Badge
+		function Tab:SetBadge(t)
+			customBadge = t
+			Tab:_setBadge(nil)
+		end
+		function Tab:SetHidden(v)
+			Tab.Hidden = v
+			btn.Visible = not v
+			if v and Window.CurrentTab == Tab then
+				for _, t in ipairs(Window.Tabs) do
+					if t ~= Tab and not t.Hidden then
+						t:Select()
+						break
+					end
+				end
+			end
+			task.defer(function() Window:_moveIndicator(false) end)
+		end
 		function Tab:_setBadge(n)
+			if n == nil and customBadge then
+				badge.Visible = not Window.Compact
+				badge.Text = tostring(customBadge)
+				set(label, { TextTransparency = Window.Compact and 1 or 0 }, true, 0.15)
+				set(iconInst, { [iconFade] = 0 }, true, 0.15)
+				return
+			end
 			badge.Visible = n ~= nil and n > 0 and not Window.Compact
 			badge.Text = tostring(n or "")
 			local dim = n ~= nil and n == 0
@@ -3224,6 +4023,7 @@ function OrcaHub:CreateWindow(opts)
 		-- the tab's own page (used when the tab has no sub-tabs)
 		local mainPage = makePage(tabPage)
 		local mainContainer = Container(mainPage, Tab.Name)
+		mainContainer.Tab = Tab
 		table.insert(Tab.Containers, mainContainer)
 		Tab.ActiveContainer = mainContainer
 
@@ -3259,6 +4059,7 @@ function OrcaHub:CreateWindow(opts)
 				if pageCover.BackgroundTransparency >= 1 then pageCover.Visible = false end
 			end)
 
+			Tab:_ensureBuilt()
 			Tab:_relayout(false)
 			task.defer(function() Window:_moveIndicator(prev ~= nil) end)
 		end
@@ -3357,6 +4158,8 @@ function OrcaHub:CreateWindow(opts)
 			end)
 			Sub.Container = container
 			Sub.Page = subPage
+			container.Tab = Tab
+			container.Sub = Sub
 			table.insert(Tab.Containers, container)
 			table.insert(Tab.SubTabs, Sub)
 			for _, st in ipairs(Tab.SubTabs) do
@@ -3391,6 +4194,7 @@ function OrcaHub:CreateWindow(opts)
 		end
 
 		table.insert(Window.Tabs, Tab)
+		if customBadge then Tab:_setBadge(nil) end
 		if #Window.Tabs == 1 then Tab:Select() end
 		return Tab
 	end
@@ -3649,6 +4453,11 @@ function OrcaHub:CreateWindow(opts)
 				end
 			end,
 		}).NoSave = true
+		ui:Dropdown({
+			Name = "Window Style", Options = { "Default", "Glass", "Sharp", "Soft" }, Default = OrcaHub.StyleName, Flag = "__OrcaStyle",
+			Tooltip = "Glass makes the window see-through and blurs the game behind it.",
+			Callback = function(v) OrcaHub:SetStyle(v) end,
+		})
 		ui:Toggle({ Name = "Compact Sidebar", Default = Window.Compact, Callback = function(v) Window:SetCompact(v) end })
 		ui:Toggle({
 			Name = "Floating Toggle Button", Default = fabAlways, Flag = "__OrcaFab",
@@ -3783,6 +4592,8 @@ function OrcaHub:CreateWindow(opts)
 		for i = #Refreshers, 1, -1 do Refreshers[i] = nil end
 		for inst in pairs(Themed) do Themed[inst] = nil end
 		OrcaHub.Options = {}
+		self.Visible = false
+		self:_updateBlur()
 		if OrcaHub.Window == self then OrcaHub.Window = nil end
 		OrcaHub.PreviewSize = nil
 		if env.__OrcaHubWindow == self then env.__OrcaHubWindow = nil end
